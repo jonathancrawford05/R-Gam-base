@@ -124,6 +124,11 @@ that the environment is pinned and self-describing, that serialisation preserves
 full precision, that the mgcv quantities we depend on exist, and that repeated
 runs are byte-identical.
 
+Publishing is deliberately narrow: `main`, the monthly rebuild, or an explicit
+`workflow_dispatch`. Pull requests and feature branches build and selftest
+without pushing, so a branch can prove the image is sound without moving
+`:latest`.
+
 The monthly rebuild picks up base-OS patches and proves the pinned snapshot is
 still resolvable. It does not move the pinned versions.
 
