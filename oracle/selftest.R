@@ -34,8 +34,17 @@ check(!is.null(manifest$cran_snapshot) && !grepl("latest", manifest$cran_repo, f
       "CRAN repo is a dated snapshot, not 'latest'")
 check(!is.null(manifest$base_image_digest), "manifest records the base image digest")
 
-message("R ", manifest$r_version, " | mgcv ", manifest$packages$mgcv,
-        " | snapshot ", manifest$cran_snapshot)
+# Every package the harness depends on must be pinned and recorded, not just
+# mgcv. jsonlite in particular is load-bearing: it is what writes the numbers.
+required <- c("mgcv", "jsonlite", "digest")
+check(all(required %in% names(manifest$packages)),
+      "manifest records every package the harness depends on")
+
+# Printed so the resolved versions are answerable from the CI log alone,
+# without pulling the image or unzipping an artifact.
+message("R ", manifest$r_version, " | snapshot ", manifest$cran_snapshot)
+message("packages: ", paste(sprintf("%s %s", names(manifest$packages),
+                                    unlist(manifest$packages)), collapse = " | "))
 
 # --- 2. full-precision serialisation ---------------------------------------
 # jsonlite's default is 4 decimal digits, which would quietly ruin every
