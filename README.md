@@ -129,8 +129,16 @@ Publishing is deliberately narrow: `main`, the monthly rebuild, or an explicit
 without pushing, so a branch can prove the image is sound without moving
 `:latest`.
 
-The monthly rebuild picks up base-OS patches and proves the pinned snapshot is
-still resolvable. It does not move the pinned versions.
+The monthly rebuild moves nothing. Because the base is digest-pinned and CRAN is
+snapshot-pinned, it cannot pull in base-OS patches either — what it proves is
+that the pinned snapshot is still resolvable and the image still builds, which
+is early warning that a pin has rotted. Picking up OS patches means bumping
+`BASE_DIGEST`, which is a deliberate commit.
+
+Because of that, a rebuild must produce byte-identical reference outputs. The
+image build time is deliberately kept out of each output and recorded in
+`index.json` instead; the selftest asserts an output's hash does not change when
+only the build time does.
 
 ## Bumping versions
 

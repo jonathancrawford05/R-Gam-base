@@ -19,6 +19,19 @@ read_manifest <- function(path = file.path(Sys.getenv("ORACLE_HOME", "/opt/oracl
   jsonlite::fromJSON(path, simplifyVector = TRUE)
 }
 
+# The environment as embedded in a reference output: everything that determines
+# a number, and nothing that does not.
+#
+# built_at is when the image was assembled. It cannot affect any result, but
+# embedding it would change the sha256 of every output whenever the image is
+# rebuilt from byte-identical pinned inputs - exactly the drift this repo exists
+# to prevent. It stays in /opt/oracle/manifest.json and in the run index, where
+# it is provenance rather than payload.
+comparable_environment <- function(manifest) {
+  if (is.null(manifest)) return(NULL)
+  manifest[setdiff(names(manifest), "built_at")]
+}
+
 # Deterministic across machines and R versions: the RNG algorithm is stated
 # explicitly rather than inherited from whatever the session default happens to
 # be. set.seed() alone is not enough for a reproducible oracle.
@@ -111,7 +124,7 @@ run_case <- function(case, manifest = read_manifest()) {
   list(
     schema_version = ORACLE_SCHEMA_VERSION,
     case = case,
-    environment = manifest,
+    environment = comparable_environment(manifest),
     data = list(
       n = nrow(dat),
       columns = names(dat),

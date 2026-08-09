@@ -6,9 +6,11 @@ on:
     # gate below.
     branches: [main, "claude/**"]
   pull_request:
-  # Monthly rebuild. This does NOT move the pinned versions - the Dockerfile
-  # pins those - it just picks up base-OS security patches and proves the pinned
-  # snapshot is still resolvable.
+  # Monthly rebuild. It moves nothing: the base is digest-pinned and CRAN is
+  # snapshot-pinned, so this cannot pull in base-OS patches either. What it
+  # proves is that the pinned snapshot is still resolvable and the image still
+  # builds - early warning that a pin has rotted. Picking up OS patches means
+  # bumping BASE_DIGEST, which is a deliberate commit.
   schedule:
     - cron: "17 5 1 * *"
   workflow_dispatch:

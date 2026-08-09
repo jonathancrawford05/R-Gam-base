@@ -78,6 +78,22 @@ for (p in case_files) {
   check(identical(h1, h2), paste0("case '", basename(p), "' is byte-identical across runs"))
 }
 
+# Stronger than the above: identical across *rebuilds*, not merely across runs
+# of one image. Only build time varies here, and it must not reach the output -
+# otherwise the monthly rebuild would change every reference hash while every
+# number stayed the same.
+early <- manifest; early$built_at <- "2000-01-01T00:00:00Z"
+late <- manifest; late$built_at <- "2030-12-31T23:59:59Z"
+check(identical(write_case_output(case_files[[1]], file.path(tempdir(), "st-early"),
+                                  manifest = early)$sha256,
+                write_case_output(case_files[[1]], file.path(tempdir(), "st-late"),
+                                  manifest = late)$sha256),
+      "output hash is invariant to image build time")
+check(is.null(run_case(jsonlite::fromJSON(case_files[[1]], simplifyVector = TRUE,
+                                          simplifyDataFrame = FALSE),
+                       manifest = manifest)$environment$built_at),
+      "built_at is kept out of the embedded environment")
+
 # --- 5. the lpmatrix really does reconstruct the linear predictor ----------
 # Guards against emitting a design matrix that does not correspond to the fit.
 case1 <- jsonlite::fromJSON(case_files[[1]], simplifyVector = TRUE, simplifyDataFrame = FALSE)

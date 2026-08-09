@@ -35,6 +35,9 @@ index <- lapply(cases, function(p) {
   write_case_output(p, out_dir, manifest = manifest)
 })
 
+# The index carries the full manifest, build timestamp included. Provenance
+# lives here precisely so it can stay out of the per-case outputs, whose hashes
+# have to survive a rebuild of identical pinned inputs.
 writeLines(
   jsonlite::toJSON(
     list(
