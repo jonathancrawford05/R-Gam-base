@@ -1,0 +1,18 @@
+{
+  "id": "binomial_logit_tp",
+  "description": "Binomial logit GAM. Exercises the non-canonical-scale path: PIRLS weights, a scale fixed at 1, and UBRE rather than GCV.",
+  "seed": 20260810,
+  "n": 800,
+  "family": "binomial",
+  "method": "REML",
+  "formula": "y ~ s(x1, bs = 'tp', k = 10) + s(x2, bs = 'tp', k = 6)",
+  "predictors": {
+    "x1": { "dist": "uniform", "min": 0, "max": 1 },
+    "x2": { "dist": "normal", "mean": 0, "sd": 1 }
+  },
+  "response": {
+    "eta": "-0.5 + 2 * sin(pi * x1) - 0.4 * x2^2",
+    "sd": 1
+  },
+  "predict_n": 50
+}

@@ -1,0 +1,5 @@
+# Built into the image by scripts/build-manifest.R; never committed.
+oracle/manifest.json
+# Generated reference outputs.
+out/
+.Rhistory
