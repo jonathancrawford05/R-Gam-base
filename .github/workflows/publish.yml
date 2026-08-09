@@ -1,0 +1,119 @@
+name: publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Monthly rebuild. This does NOT move the pinned versions - the Dockerfile
+  # pins those - it just picks up base-OS security patches and proves the pinned
+  # snapshot is still resolvable.
+  schedule:
+    - cron: "17 5 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Dockerfile is the single source of truth for the pinned versions;
+      # the workflow reads them rather than restating them, so they cannot drift.
+      - name: Resolve image coordinates
+        id: meta
+        run: |
+          set -euo pipefail
+          r_version=$(sed -n 's/^ARG R_VERSION=//p' Dockerfile | head -1)
+          snapshot=$(sed -n 's/^ARG CRAN_SNAPSHOT=//p' Dockerfile | head -1)
+          # GHCR requires a lowercase path; this repository is "R-Gam-base".
+          image="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "image=$image"
+            echo "r_version=$r_version"
+            echo "snapshot=$snapshot"
+            echo "version_tag=r${r_version}-${snapshot}"
+            echo "sha_tag=sha-$(echo '${{ github.sha }}' | cut -c1-12)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build and load locally first. The image is tested before it is pushed,
+      # and the bytes that pass the test are the exact bytes published.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: oracle-local:candidate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Selftest
+        run: docker run --rm oracle-local:candidate Rscript /opt/oracle/selftest.R
+
+      # Also exercises the way polaris-re will consume the image: mount a
+      # workspace, write reference outputs into it.
+      - name: Generate reference outputs
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          docker run --rm -v "${{ github.workspace }}/out:/work/out" \
+            oracle-local:candidate Rscript /opt/oracle/run.R --out /work/out
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reference-outputs
+          path: out/
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        id: push
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          image='${{ steps.meta.outputs.image }}'
+          for tag in latest '${{ steps.meta.outputs.version_tag }}' '${{ steps.meta.outputs.sha_tag }}'; do
+            docker tag oracle-local:candidate "$image:$tag"
+            docker push "$image:$tag" | tee -a /tmp/push.log
+          done
+          digest=$(grep -o 'sha256:[0-9a-f]\{64\}' /tmp/push.log | tail -1)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # The consumer pins by digest, so make the digest impossible to miss.
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          image='${{ steps.meta.outputs.image }}'
+          digest='${{ steps.push.outputs.digest }}'
+          {
+            echo "## Published"
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| image | \`$image\` |"
+            echo "| R | \`${{ steps.meta.outputs.r_version }}\` |"
+            echo "| CRAN snapshot | \`${{ steps.meta.outputs.snapshot }}\` |"
+            echo "| digest | \`$digest\` |"
+            echo
+            echo "Pin this in the consuming repository:"
+            echo
+            echo '```yaml'
+            echo "    container: $image@$digest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

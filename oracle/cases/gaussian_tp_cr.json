@@ -1,0 +1,19 @@
+{
+  "id": "gaussian_tp_cr",
+  "description": "Gaussian identity-link GAM: thin-plate and cubic-regression smooths plus a parametric term. The baseline penalized-GAM case.",
+  "seed": 20260809,
+  "n": 400,
+  "family": "gaussian",
+  "method": "REML",
+  "formula": "y ~ s(x1, bs = 'tp', k = 10) + s(x2, bs = 'cr', k = 8) + x3",
+  "predictors": {
+    "x1": { "dist": "uniform", "min": 0, "max": 1 },
+    "x2": { "dist": "uniform", "min": 0, "max": 1 },
+    "x3": { "dist": "normal", "mean": 0, "sd": 1 }
+  },
+  "response": {
+    "eta": "2 + sin(2 * pi * x1) + 0.5 * x2^2 + 0.3 * x3",
+    "sd": 0.4
+  },
+  "predict_n": 50
+}
