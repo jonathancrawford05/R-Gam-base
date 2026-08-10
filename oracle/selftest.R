@@ -40,6 +40,13 @@ required <- c("mgcv", "jsonlite", "digest")
 check(all(required %in% names(manifest$packages)),
       "manifest records every package the harness depends on")
 
+# mboost is not used by this harness, but the image ships it and a consumer needs
+# to be able to stamp its output with the version that produced it. Its fitting
+# behaviour is gated at build time by oracle/mboost_smoke.R, not here.
+check("mboost" %in% names(manifest$packages),
+      "manifest records the mboost version")
+check(requireNamespace("mboost", quietly = TRUE), "mboost is installed and loadable")
+
 # Printed so the resolved versions are answerable from the CI log alone,
 # without pulling the image or unzipping an artifact.
 message("R ", manifest$r_version, " | snapshot ", manifest$cran_snapshot)

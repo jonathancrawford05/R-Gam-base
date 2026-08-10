@@ -5,7 +5,14 @@
 args <- commandArgs(trailingOnly = TRUE)
 out <- if (length(args) >= 1) args[[1]] else "/opt/oracle/manifest.json"
 
-pkgs <- c("mgcv", "nlme", "Matrix", "survival", "jsonlite", "digest", "sessioninfo")
+pkgs <- c(
+  # the GAM oracle and what it links against
+  "mgcv", "nlme", "Matrix", "survival",
+  # serialisation and hashing of the outputs
+  "jsonlite", "digest", "sessioninfo",
+  # boosting, plus the tree the snapshot resolved for it
+  "mboost", "stabs", "nnls", "quadprog", "partykit"
+)
 present <- pkgs[vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
 
 env_or_null <- function(name) {

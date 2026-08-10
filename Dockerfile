@@ -34,19 +34,34 @@ RUN printf "options(repos = c(CRAN = '%s'))\n" "${CRAN}" >> "${R_HOME}/etc/Rprof
 # mgcv is already present as a recommended package, but install it explicitly so
 # its version is a deliberate choice pinned by CRAN_SNAPSHOT rather than an
 # accident of which R release the base image happens to be built from.
+#
+# mboost brings its own tree (stabs, nnls, quadprog, partykit, survival, ...),
+# resolved by the same dated snapshot rather than from HEAD. Note that this is
+# where a dependency could drag Matrix or nlme forward underneath mgcv, which is
+# what assert-pinned-versions.R below exists to catch.
+#
 # install.packages() only warns on failure, so assert loadability separately.
-RUN R -q -e "install.packages(c('mgcv', 'jsonlite', 'digest', 'sessioninfo'))" \
-    && R -q -e "p <- c('mgcv','jsonlite','digest','sessioninfo'); \
+RUN R -q -e "install.packages(c('mgcv', 'jsonlite', 'digest', 'sessioninfo', 'mboost'))" \
+    && R -q -e "p <- c('mgcv','jsonlite','digest','sessioninfo','mboost'); \
                 ok <- vapply(p, requireNamespace, logical(1), quietly = TRUE); \
                 if (!all(ok)) stop('failed to install: ', paste(p[!ok], collapse=', '))"
 
 COPY oracle/ /opt/oracle/
 COPY scripts/build-manifest.R /opt/oracle/build-manifest.R
+COPY scripts/assert-pinned-versions.R /opt/oracle/assert-pinned-versions.R
+
+# Fails the build if adding a package moved mgcv or anything it links against.
+RUN Rscript /opt/oracle/assert-pinned-versions.R
+
+# Fails the build if mboost cannot fit the shape of model it was added for, so a
+# broken install stops here rather than at the first user.
+RUN Rscript /opt/oracle/mboost_smoke.R
 
 # Freeze the resolved versions into the image. Every reference output embeds
 # this block, so "which mgcv produced this number" is answerable from the
 # artifact alone.
 RUN Rscript /opt/oracle/build-manifest.R /opt/oracle/manifest.json \
+    && ln -s /opt/oracle/manifest.json /opt/versions.json \
     && cat /opt/oracle/manifest.json
 
 ENV ORACLE_HOME=/opt/oracle
