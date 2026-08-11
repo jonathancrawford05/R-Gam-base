@@ -71,6 +71,18 @@ my_df <- 4
 my_nu <- 0.2
 resp <- quote(cbind(DthCnt, pmax(0, ExposCnt - DthCnt)))
 
+# Start the predictor at the crude rate on the link scale.
+#
+# Without this the boosting path begins at eta = 0, which under cloglog is
+# p = 1 - exp(-1) = 0.63 against a true rate of 0.014. The first gradient steps
+# are then enormous, and the run diverges rather than converges: measured at
+# risk 28590 -> 497350 over 50 iterations with a single base-learner selected
+# every time. Mortality work is always in this regime -- small probabilities,
+# large exposures -- so a sane offset is part of the model, not a tuning knob.
+crude_q <- sum(d$DthCnt) / sum(d$ExposCnt)
+eta0 <- log(-log1p(-crude_q))
+cat(sprintf("crude q: %.5f | offset (cloglog): %.4f\n", crude_q, eta0))
+
 # --- the family, before any fitting ------------------------------------------
 fam <- tryCatch(
   {
@@ -89,7 +101,7 @@ fit_one <- function(label, rhs, mstop = 5L) {
   tryCatch(
     {
       fm <- as.formula(paste(deparse(resp), "~", rhs))
-      m <- gamboost(fm, data = d, family = fam,
+      m <- gamboost(fm, data = d, family = fam, offset = eta0,
                     control = boost_control(mstop = mstop, nu = my_nu, trace = FALSE))
       stopifnot(all(is.finite(predict(m, type = "link"))))
       ok(label)
@@ -113,8 +125,8 @@ if (!is.null(fam)) {
           "bbs(AttdAge, by = StudyYear_C, df = my_df, knots = 8, center = TRUE)")
   fit_one("%X% Kronecker base-learner",
           "bbs(AttdAge, df = my_df, knots = 8) %X% bbs(PolYear, df = my_df, knots = 5)")
-  fit_one("bols(f, by = g) factor x factor",
-          "bols(Smoke, by = FaceSize)")
+  invisible(fit_one("bols(f, by = g) factor x factor",
+                    "bols(Smoke, by = FaceSize)"))
 }
 
 # --- the whole GA2M formula together -----------------------------------------
@@ -139,7 +151,7 @@ if (length(failures) == 0L) {
         bbs(AttdAge, by = StudyYear_C, df = my_df, knots = 8, center = TRUE) +
         bols(Smoke, by = FaceSize)
 
-      fit <- gamboost(ga2m, data = d, family = fam,
+      fit <- gamboost(ga2m, data = d, family = fam, offset = eta0,
                       control = boost_control(mstop = 50L, nu = my_nu, trace = FALSE))
 
       cf <- coef(fit)
@@ -160,6 +172,8 @@ if (length(failures) == 0L) {
       # Boosting that never improves the risk would pass every structural check
       # above while telling us nothing about whether the fit actually ran.
       r <- risk(fit)
+      cat(sprintf("risk path: %.4f -> %.4f over %d iterations (%d distinct learners)\n",
+                  r[1], r[length(r)], length(r) - 1L, length(unique(sel))))
       stopifnot(is.finite(r[length(r)]), r[length(r)] < r[1])
       ok("risk decreases over the boosting path")
     },
