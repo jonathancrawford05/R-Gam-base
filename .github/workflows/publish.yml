@@ -5,6 +5,10 @@ on:
     # Feature branches build and selftest but never publish; see the PUBLISH
     # gate below.
     branches: [main, "claude/**"]
+    # The publish job appends to BUILDS.md and pushes it to main. Without this
+    # the catalog commit would retrigger the workflow, which would publish a new
+    # build, which would append another row -- forever.
+    paths-ignore: ["BUILDS.md"]
   pull_request:
   # Monthly rebuild. It moves nothing: the base is digest-pinned and CRAN is
   # snapshot-pinned, so this cannot pull in base-OS patches either. What it
@@ -16,7 +20,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # the publish job appends the BUILDS.md row
   packages: write
 
 concurrency:
@@ -46,13 +50,44 @@ jobs:
           snapshot=$(sed -n 's/^ARG CRAN_SNAPSHOT=//p' Dockerfile | head -1)
           # GHCR requires a lowercase path; this repository is "R-Gam-base".
           image="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+
+          # The build number is what makes a tag unique when the version fields
+          # cannot: two builds with the same R and the same snapshot are still two
+          # builds. BUILDS.md is the source of truth rather than the registry, so
+          # the catalog can never fall behind the tag it describes.
+          last=$(grep -oE 'r[0-9.]+-cran[0-9-]+-b[0-9]+' BUILDS.md 2>/dev/null \
+                 | sed 's/.*-b//' | sort -n | tail -1)
+          build_number=$(( ${last:-0} + 1 ))
+          tag="r${r_version}-cran${snapshot}-b${build_number}"
+          created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
           {
             echo "image=$image"
             echo "r_version=$r_version"
             echo "snapshot=$snapshot"
-            echo "version_tag=r${r_version}-${snapshot}"
-            echo "sha_tag=sha-$(echo '${{ github.sha }}' | cut -c1-12)"
+            echo "build_number=$build_number"
+            echo "tag=$tag"
+            echo "created=$created"
+            echo "float_tag=r${r_version}-latest"
           } >> "$GITHUB_OUTPUT"
+          echo "resolved build $build_number -> $image:$tag"
+
+      # Tags are immutable and never reused. A tag that already exists means the
+      # build number was not bumped, and re-pointing it would silently change the
+      # bytes behind a string somebody may already have written into a recorded
+      # measurement. Refuse rather than overwrite.
+      - name: Refuse to reuse an existing tag
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          target='${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}'
+          if docker manifest inspect "$target" >/dev/null 2>&1; then
+            echo "::error title=Tag already exists::$target is already published. \
+          Tags are immutable and are never re-pointed. Bump the build number in \
+          BUILDS.md (append the row for the existing build if it is missing) and re-run."
+            exit 1
+          fi
+          echo "$target is free"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -66,6 +101,12 @@ jobs:
           tags: oracle-local:candidate
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            IMAGE_TAG=${{ steps.meta.outputs.tag }}
+            BUILD_NUMBER=${{ steps.meta.outputs.build_number }}
+            BUILD_CREATED=${{ steps.meta.outputs.created }}
+            SOURCE_REVISION=${{ github.sha }}
+            SOURCE_REPO=${{ github.server_url }}/${{ github.repository }}
 
       - name: Selftest
         run: docker run --rm oracle-local:candidate Rscript /opt/oracle/selftest.R
@@ -99,14 +140,65 @@ jobs:
         run: |
           set -euo pipefail
           image='${{ steps.meta.outputs.image }}'
-          for tag in latest '${{ steps.meta.outputs.version_tag }}' '${{ steps.meta.outputs.sha_tag }}'; do
-            docker tag oracle-local:candidate "$image:$tag"
-            docker push "$image:$tag" | tee -a /tmp/push.log
-          done
-          digest=$(grep -o 'sha256:[0-9a-f]\{64\}' /tmp/push.log | tail -1)
+          tag='${{ steps.meta.outputs.tag }}'
+
+          # The immutable tag first, and its digest is the one recorded.
+          docker tag oracle-local:candidate "$image:$tag"
+          docker push "$image:$tag" | tee /tmp/push.log
+          digest=$(grep -oE 'sha256:[0-9a-f]{64}' /tmp/push.log | tail -1)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      # The consumer pins by digest, so make the digest impossible to miss.
+          # Floating pointers. These DO move by design, which is why they are
+          # named so that nobody could mistake one for a pin.
+          for f in latest '${{ steps.meta.outputs.float_tag }}'; do
+            docker tag oracle-local:candidate "$image:$f"
+            docker push "$image:$f" >/dev/null
+            echo "moved floating tag $f -> $digest"
+          done
+
+      # Read the versions back out of the image that was just pushed, rather
+      # than restating what the Dockerfile asked for.
+      - name: Read versions from the published image
+        id: versions
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm oracle-local:candidate cat /opt/oracle-manifest.json > /tmp/m.json
+          cat /tmp/m.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          m = json.load(open("/tmp/m.json"))
+          p = m.get("packages", {})
+          print(f"mgcv={p.get('mgcv','-')}")
+          print(f"mboost={p.get('mboost','-')}")
+          PY
+
+      # The catalog is the artifact a consumer actually reads; appending here is
+      # what stops it falling behind the registry.
+      - name: Append the BUILDS.md row
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          row="| ${{ steps.meta.outputs.build_number }} \
+          | \`${{ steps.meta.outputs.tag }}\` \
+          | \`${{ steps.push.outputs.digest }}\` \
+          | ${{ steps.meta.outputs.r_version }} \
+          | ${{ steps.meta.outputs.snapshot }} \
+          | ${{ steps.versions.outputs.mgcv }} \
+          | ${{ steps.versions.outputs.mboost }} \
+          | ${{ steps.meta.outputs.created }} \
+          | \`${{ github.sha }}\` \
+          | _(pending: describe this build)_ |"
+          echo "$row" | tr -s ' ' >> BUILDS.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BUILDS.md
+          git commit -m "catalog: build ${{ steps.meta.outputs.build_number }} (${{ steps.meta.outputs.tag }}) [skip ci]"
+          # Rebase rather than force: a concurrent commit to main must not be lost.
+          git pull --rebase --autostash origin main
+          git push origin HEAD:main
+
       - name: Summary
         if: env.PUBLISH == 'true'
         run: |
@@ -117,14 +209,19 @@ jobs:
             echo
             echo "| field | value |"
             echo "| --- | --- |"
-            echo "| image | \`$image\` |"
+            echo "| immutable tag | \`${{ steps.meta.outputs.tag }}\` |"
+            echo "| digest | \`$digest\` |"
             echo "| R | \`${{ steps.meta.outputs.r_version }}\` |"
             echo "| CRAN snapshot | \`${{ steps.meta.outputs.snapshot }}\` |"
-            echo "| digest | \`$digest\` |"
+            echo "| mgcv | \`${{ steps.versions.outputs.mgcv }}\` |"
+            echo "| mboost | \`${{ steps.versions.outputs.mboost }}\` |"
             echo
-            echo "Pin this in the consuming repository:"
+            echo "**Pin by digest.** Tags, even the immutable one, are for humans:"
             echo
             echo '```yaml'
             echo "    container: $image@$digest"
             echo '```'
+            echo
+            echo "A row has been appended to BUILDS.md. Please replace its"
+            echo "_(pending)_ note with a sentence saying what actually changed."
           } >> "$GITHUB_STEP_SUMMARY"
