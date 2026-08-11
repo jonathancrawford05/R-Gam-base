@@ -1,8 +1,9 @@
 # R-Gam-base
 
-A digest-pinned R + mgcv container that produces independent reference outputs
+A digest-pinned R container that produces independent reference outputs
 ("oracle" outputs) for validating [Polaris RE](https://github.com/jonathancrawford05/polaris-re)'s
-penalized GAM implementation.
+penalized GAM implementation, and that also carries **mboost** for
+`gamboost()` feature and interaction selection.
 
 The value of an oracle is that its answers do not move. If a comparison fails,
 that has to mean *your* implementation changed — never that the reference did.
@@ -30,8 +31,14 @@ Two notes on the base image, both of which are easy to get wrong:
   happens to track.
 
 The resolved versions are frozen into `/opt/oracle/manifest.json` at build time
-and embedded in **every** reference output, so "which mgcv produced this number"
-is answerable from the artifact alone.
+(also reachable as `/opt/versions.json`) and embedded in **every** reference
+output, so "which mgcv produced this number" is answerable from the artifact
+alone. To stamp your own output with what produced it:
+
+```bash
+docker run --rm ghcr.io/jonathancrawford05/r-gam-base@sha256:<digest> \
+  cat /opt/versions.json
+```
 
 ## Use it
 
@@ -57,6 +64,40 @@ mgcv-conformance:
 ```
 
 The digest for each build is printed in that run's GitHub Actions job summary.
+
+## Boosting with mboost
+
+The image carries `mboost` from the same dated snapshot, for `gamboost()` GA2M
+fits — spline main effects, varying coefficients by factor, Kronecker
+interactions, and a `cbind(deaths, exposure - deaths)` binomial response on a
+cloglog link.
+
+`oracle/mboost_smoke.R` runs **inside `docker build`**, so a broken install fails
+the build rather than the first user. It is shaped like the real fit rather than
+a generic toy call, because the constructs that break on a fresh install are the
+specific ones that fit uses:
+
+| construct | why it is tested separately |
+| --- | --- |
+| `bbs(x, df, knots)` | spline main effect |
+| `bols(f)` | factor main effect |
+| `bbs(x, by = f, center = TRUE)` | varying coefficient |
+| `bbs(x) %X% bbs(z)` | Kronecker base-learner |
+| `bols(f, by = g)` | factor × factor |
+| `Binomial(type = "glm", link = "cloglog")` | two-column `cbind()` response |
+
+Each base-learner is fitted alone before the combined formula, so a failure names
+the construct rather than reporting "the formula failed". The synthetic data is
+cell-grouped at the real grain — one row per
+`Smoke × FaceSize × StudyYear × Duration × AttainedAge` — including zero-death
+cells, which is where a cloglog binomial fit is most fragile.
+
+**Adding mboost must not move the oracle.** mgcv links against Matrix and nlme, so
+a new dependency can change the linear algebra underneath mgcv while
+`packageVersion("mgcv")` stays put — a rebuild that looks clean while the numbers
+move. `scripts/assert-pinned-versions.R` fails the build if R, mgcv, Matrix,
+nlme, jsonlite or digest move. Packages that cannot reach a fitted value
+(survival, the mboost tree) are recorded but allowed to float.
 
 Keep the image **public** on GHCR. A public package needs no credentials from
 the consumer; a private one would require a PAT with `read:packages`, because a
