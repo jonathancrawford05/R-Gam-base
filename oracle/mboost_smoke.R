@@ -180,25 +180,24 @@ if (length(failures) == 0L) {
                   r[1], r[length(r)], length(r) - 1L, length(unique(sel))))
       cat("  first 5:", paste(sprintf("%.1f", head(r, 5)), collapse = " "), "\n")
       cat("  last 5: ", paste(sprintf("%.1f", tail(r, 5)), collapse = " "), "\n")
+      # Measured shape: the first two or three steps overshoot hard (28e3 -> 341e3
+      # -> 8.7e6 -> 1.5e7) and the path then falls steadily (8.3e5 ... 5.2e5) but
+      # has not returned below its start by iteration 50. Small probabilities and
+      # large exposures make the early negative gradient enormous, and nu = 0.2 is
+      # not small enough to contain the first step. On real data mstop = 500 has
+      # far more room to recover, but it is worth a maintainer checking
+      # risk(fit)[1:10] rather than assuming the early path is productive.
       if (r[length(r)] >= r[1]) {
-        message("NOTE risk did not fall on the two-column cbind() response -- see the ",
-                "weights parameterisation below")
+        message("NOTE risk has not returned below its starting value by iteration ",
+                length(r) - 1L, " -- early overshoot, see the path above")
       }
 
-      # The same model with the response given as a proportion and the exposure as
-      # prior weights. If cbind() diverges and this does not, the two-column form
-      # is not being interpreted the way the production script assumes -- which is
-      # worth knowing before a 500-iteration fit on real data.
-      d2 <- d
-      d2$rate <- d2$DthCnt / d2$ExposCnt
-      alt <- gamboost(update(ga2m, rate ~ .), data = d2, family = fam,
-                      weights = d2$ExposCnt, offset = eta0,
-                      control = boost_control(mstop = 50L, nu = my_nu, trace = FALSE))
-      ra <- risk(alt)
-      cat(sprintf("risk path (rate + weights): %.4f -> %.4f (%d distinct learners)\n",
-                  ra[1], ra[length(ra)], length(unique(selected(alt)))))
-      stopifnot(all(is.finite(predict(alt, type = "link"))))
-      ok("both response parameterisations fit and predict finitely")
+      # NOT retried as a proportion + weights: mboost refuses it outright --
+      # "response should be either a two-column matrix (no. successes and no.
+      # failures) or a two level factor or a vector of 0 and 1's for this family".
+      # So the production script's cbind() form is not merely supported, it is the
+      # only accepted parameterisation for Binomial(type = "glm"), and the
+      # overshoot above is not an artefact of how the response was passed.
     },
     error = function(e) bad("full GA2M formula", e)
   )
