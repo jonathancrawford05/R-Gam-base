@@ -25,7 +25,13 @@ permissions:
 
 concurrency:
   group: publish-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a run that might be publishing. Pushing the image tag and
+  # appending the BUILDS.md row are two steps with no transaction around them: a
+  # cancel landing between them leaves a tag in the registry with no catalog row,
+  # which silently consumes a build number and wedges the next publish until
+  # someone hand-edits the file. Branch and PR runs publish nothing, so they stay
+  # cancellable and keep saving the CI minutes this setting was added for.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   image:

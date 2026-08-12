@@ -9,7 +9,11 @@
 # reference must never be invalidated for a naming problem.
 #
 # It also prints the image's recorded versions, so a build published before the
-# manifest/label policy existed can be catalogued by inspection instead of guesswork.
+# manifest/label policy existed can be CONFIRMED by inspection. Note the ordering:
+# the catalog row must already exist before this will run (see the gate below), so
+# inspection here verifies a row that was written from the publishing run's logs
+# or from `docker run <ref> cat /opt/oracle/manifest.json` locally. Catalog first,
+# then tag, then confirm.
 #
 # Usage: Actions -> "retag" -> Run workflow, supply the digest and the new tag.
 # =============================================================================
@@ -37,7 +41,13 @@ jobs:
     name: Retag an existing digest
     runs-on: ubuntu-latest
     steps:
+      # Pinned to main, not the dispatched ref. The gate below validates against
+      # BUILDS.md, and a dispatch from a stale branch would otherwise check
+      # against a stale catalog -- passing a digest that main has never heard of.
+      # It also means the tag guard runs main's reviewed copy of the script.
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Resolve and validate inputs
         id: meta
