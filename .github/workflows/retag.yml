@@ -37,6 +37,8 @@ jobs:
     name: Retag an existing digest
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Resolve and validate inputs
         id: meta
         run: |
@@ -68,14 +70,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Fail-closed, same as publish: only a definite 404 lets the retag proceed.
       - name: Refuse to reuse an existing tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          if docker manifest inspect '${{ steps.meta.outputs.target }}' >/dev/null 2>&1; then
-            echo "::error title=Tag already exists::${{ steps.meta.outputs.target }} is already \
+          set -uo pipefail
+          bash scripts/check-tag-free.sh \
+            '${{ steps.meta.outputs.image }}' '${{ inputs.tag }}'
+          rc=$?
+          case "$rc" in
+            0)  echo "tag is free; proceeding" ;;
+            10) echo "::error title=Tag already exists::${{ steps.meta.outputs.target }} is already \
           published. Tags are immutable and are never re-pointed."
-            exit 1
-          fi
+                exit 1 ;;
+            *)  echo "::error title=Cannot verify tag state::Refusing to retag without a definite \
+          answer from the registry."
+                exit 1 ;;
+          esac
 
       - name: Verify the source digest exists
         run: docker manifest inspect '${{ steps.meta.outputs.ref }}' >/dev/null
@@ -106,23 +118,42 @@ jobs:
         run: |
           set -euo pipefail
           ref='${{ steps.meta.outputs.ref }}'
+          # /opt/oracle-manifest.json exists only from build 3 onward. Builds
+          # predating it still carry the harness manifest, so try that second --
+          # and if neither is present, say so instead of printing an empty block.
+          found=""
+          for path in /opt/oracle-manifest.json /opt/oracle/manifest.json; do
+            if docker run --rm "$ref" test -f "$path" 2>/dev/null; then
+              found="$path"; break
+            fi
+          done
+
           {
             echo "## Retagged"
             echo
             echo "- image: \`${{ steps.meta.outputs.target }}\`"
             echo "- digest: \`${{ inputs.digest }}\`"
             echo
-            echo "### Versions, read from the image"
+            if [ -n "$found" ]; then
+              echo "### Versions, read from the image (\`$found\`)"
+              echo
+              echo '```json'
+              docker run --rm "$ref" cat "$found"
+              echo '```'
+            else
+              echo "### Versions"
+              echo
+              echo "This image carries neither \`/opt/oracle-manifest.json\` nor"
+              echo "\`/opt/oracle/manifest.json\`. It predates both. Record its versions in"
+              echo "BUILDS.md from the workflow run that published it, and say so in the row."
+            fi
             echo
-            echo '```json'
-            docker run --rm "$ref" sh -c \
-              'cat /opt/oracle-manifest.json 2>/dev/null || cat /opt/oracle/manifest.json' || true
-            echo '```'
-            echo
-            echo "### MASS (not in the older manifest)"
+            echo "### Packages not covered by the older manifest"
             echo
             echo '```'
             docker run --rm "$ref" Rscript -e \
-              'cat("MASS", as.character(packageVersion("MASS")), "\n")' || true
+              'for (p in c("MASS","mgcv","mboost")) cat(p,
+                 tryCatch(as.character(packageVersion(p)), error = function(e) "absent"), "\n")' \
+              || echo "(could not run R in this image)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
