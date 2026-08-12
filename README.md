@@ -98,11 +98,18 @@ The resolved versions are frozen into the image at build time and embedded in
 **every** reference output, so "which mgcv produced this number" is answerable
 from the artifact alone.
 
-| path | what it is |
-| --- | --- |
-| `/opt/oracle-manifest.json` | build identity + installed versions; the one to read |
-| `/opt/versions.json` | alias of the above |
-| `/opt/oracle/manifest.json` | the harness's own copy, embedded in each reference output |
+| path | schema | what it is |
+| --- | --- | --- |
+| `/opt/oracle-manifest.json` | 2 | Build identity + installed versions. **Read this one.** Present from build 3. |
+| `/opt/oracle/manifest.json` | 1 | The harness's own copy, embedded in every reference output. |
+| `/opt/versions.json` | 1 | Alias of `/opt/oracle/manifest.json`, unchanged. |
+
+`/opt/versions.json` deliberately still points at the schema-1 file. The two
+schemas differ — schema 2 drops `r_svn_rev` and moves `built_at` under `image` —
+so re-pointing the alias would leave an existing reader's `.built_at` silently
+`null`. A path that stays truthful-looking while what it denotes changes
+underneath is the same failure as a moved tag, and it gets the same answer here:
+new name for new content.
 
 ## Use it
 

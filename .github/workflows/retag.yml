@@ -59,6 +59,28 @@ jobs:
           r<R>-cran<YYYY-MM-DD>-b<N>, e.g. r4.6.1-cran2026-08-01-b2."
             exit 1
           fi
+          # The catalog must already know this digest.
+          #
+          # publish.yml derives the next build number by grepping BUILDS.md, so a
+          # tag minted here and never recorded silently consumes a number: the
+          # catalog still tops out at the old value, a later publish derives a
+          # number this workflow already used, and the tag guard then blocks
+          # publishing until someone hand-edits the file -- with nothing to
+          # connect that failure to a retag run from weeks earlier. Requiring the
+          # row first keeps the invariant and keeps this workflow free of write
+          # access to the repository.
+          if ! grep -qF "$digest" BUILDS.md; then
+            echo "::error title=Digest is not catalogued::$digest does not appear in \
+          BUILDS.md. Append its row first -- the catalog is the source of truth for build \
+          numbers, and a tag it does not know about will wedge a later publish."
+            exit 1
+          fi
+          if ! grep -qF "$tag" BUILDS.md; then
+            echo "::error title=Tag is not catalogued::BUILDS.md does not mention '$tag'. \
+          The row for this digest must name the tag being applied."
+            exit 1
+          fi
+
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "ref=$image@$digest" >> "$GITHUB_OUTPUT"
           echo "target=$image:$tag" >> "$GITHUB_OUTPUT"
@@ -76,9 +98,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
+          # Actions runs `run:` under `bash -e`; `set -uo pipefail` does not clear
+          # it, so without this the case below never executes.
+          set +e
           bash scripts/check-tag-free.sh \
             '${{ steps.meta.outputs.image }}' '${{ inputs.tag }}'
           rc=$?
+          set -e
           case "$rc" in
             0)  echo "tag is free; proceeding" ;;
             10) echo "::error title=Tag already exists::${{ steps.meta.outputs.target }} is already \

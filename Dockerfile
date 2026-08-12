@@ -69,19 +69,25 @@ RUN Rscript /opt/oracle/mboost_smoke.R
 # this block, so "which mgcv produced this number" is answerable from the
 # artifact alone.
 RUN Rscript /opt/oracle/build-manifest.R /opt/oracle/manifest.json \
+    && ln -sf /opt/oracle/manifest.json /opt/versions.json \
     && cat /opt/oracle/manifest.json
 
 # The build-identity manifest, at the fixed path a consumer reads:
 #   docker run --rm <image> cat /opt/oracle-manifest.json
 # Versions come from the installed library, so it records what IS here rather
-# than what was asked for. /opt/versions.json is kept as an alias because a
-# consumer already uses that path.
+# than what was asked for.
+#
+# This is ADDITIVE. /opt/versions.json deliberately still points at
+# /opt/oracle/manifest.json above, because the two files are different schemas:
+# v2 drops r_svn_rev and moves built_at under `image`. Re-pointing the alias
+# would leave an existing reader's `.built_at` silently null -- a path that stays
+# truthful-looking while what it denotes changes underneath, which is precisely
+# the failure this repo's tag policy exists to prevent.
 COPY scripts/oracle-manifest.R /opt/oracle/oracle-manifest.R
 RUN IMAGE_TAG="${IMAGE_TAG}" BUILD_NUMBER="${BUILD_NUMBER}" \
     BUILD_CREATED="${BUILD_CREATED}" SOURCE_REVISION="${SOURCE_REVISION}" \
     SOURCE_REPO="${SOURCE_REPO}" \
     Rscript /opt/oracle/oracle-manifest.R /opt/oracle-manifest.json \
-    && ln -sf /opt/oracle-manifest.json /opt/versions.json \
     && cat /opt/oracle-manifest.json
 
 ENV ORACLE_HOME=/opt/oracle
