@@ -225,7 +225,22 @@ jobs:
           | ${{ steps.meta.outputs.created }} \
           | \`${{ github.sha }}\` \
           | _(pending: describe this build)_ |"
-          echo "$row" | tr -s ' ' >> BUILDS.md
+          # Insert into the table, not at the end of the file. `>> BUILDS.md`
+          # put build 3's row below the notes section, where it rendered as a
+          # stray one-row table -- the data was right and the document was
+          # wrong, which is a poor property for the artifact consumers read.
+          # The marker makes the insertion point explicit and reviewable rather
+          # than inferred from "the last line that looks like a row".
+          marker='<!-- new build rows are inserted directly above this line -->'
+          if ! grep -qF "$marker" BUILDS.md; then
+            echo "::error title=Catalog marker missing::BUILDS.md has no insertion marker, \
+          so this row has nowhere well-defined to go. Restore the marker line at the end of \
+          the Builds table."
+            exit 1
+          fi
+          printf '%s\n' "$(echo "$row" | tr -s ' ')" > /tmp/row.md
+          awk -v marker="$marker" 'index($0, marker) { while ((getline line < "/tmp/row.md") > 0) print line } { print }' \
+            BUILDS.md > /tmp/BUILDS.md && mv /tmp/BUILDS.md BUILDS.md
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
