@@ -44,9 +44,55 @@ than produced by it. Specifically:
   [31336654228](https://github.com/jonathancrawford05/R-Gam-base/actions/runs/31336654228).
   Build 2: run
   [31445230665](https://github.com/jonathancrawford05/R-Gam-base/actions/runs/31445230665).
-- **The `-b1` and `-b2` tags are assigned here but not yet applied in the
-  registry.** Until they are, **resolve these builds by digest, not by tag**;
-  the digest column has been correct from the moment it was written.
+- **The `-b1` and `-b2` tags are assigned here and are not yet correctly applied
+  in the registry.** See the section below. Until they are, **resolve these
+  builds by digest, not by tag**; the digest column has been correct from the
+  moment it was written.
 - MASS is not recorded for these two builds: it was not in their manifest package
   list and could not be read without running the images. It is recorded from
   build 3 onward.
+
+## The first `-b1` retag attempt was wrong
+
+Recorded because this catalog is a history, and because the mistake is worth
+knowing if you ever reach for the same tool.
+
+`retag.yml` originally applied a tag with `docker buildx imagetools create`,
+described in its own comments as "copies the manifest rather than rebuilding".
+That is not what it does. Given a plain image manifest it builds a manifest
+**list** referencing it, and the list is a new object with its own digest. Run
+[31800500412](https://github.com/jonathancrawford05/R-Gam-base/actions/runs/31800500412):
+
+```
+copying sha256:a77a61cf... from ...@sha256:a77a61cf...
+pushing sha256:1971e750... to ...:r4.6.1-cran2026-08-01-b1
+```
+
+So `r4.6.1-cran2026-08-01-b1` currently resolves to
+`sha256:1971e750f8c48be8eb941307d7d6873ac115803ce1f2b25a6aff6acb9b8f8ecb`, a
+one-entry manifest list whose single child is build 1. Pulling that tag gives
+you build 1's image; the digest it resolves to is nevertheless not build 1's.
+
+What did **not** happen matters as much as what did:
+
+- **Build 1's digest is untouched.** `sha256:a77a61cf…` is still present, still
+  pullable, still exactly the bytes polaris-re validated. No recorded
+  measurement is affected.
+- **The run failed.** The confirmation step compared the resolved digest against
+  the requested one and stopped the job, so nothing downstream acted on it and
+  no catalog row claimed success. The tag was written before that check, which
+  is why there is residue at all.
+- **`-b2` was never attempted.** The two retags were run one at a time rather
+  than together, so the fault produced one bad tag instead of two.
+
+`1971e750` is deliberately **not** given a build number. It is not a build — it
+is a wrapper created by a failed operation, it appears in no measurement, and
+numbering it would imply the image was published on purpose.
+
+The fix replaces `imagetools create` with a re-PUT of the manifest's exact bytes
+(`scripts/point-tag-at-digest.sh`), which is digest-preserving by construction:
+a manifest's digest *is* the hash of its bytes. Correcting the `-b1` tag then
+requires re-pointing a tag, which this repository otherwise forbids — permitted
+here by a rule narrow enough to keep the guarantee intact: a tag may be
+re-pointed only when the digest it currently names appears **nowhere in this
+catalog**, which is what proves no measurement can cite it.

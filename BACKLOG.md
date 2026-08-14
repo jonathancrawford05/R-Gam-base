@@ -27,7 +27,6 @@ is listed under [Closed](#closed) for reference.
 |---|---|---|---|---|---|
 | [P2-1](#p2-1) | `publish.yml` | build number is grepped out of free-form Markdown | **medium** | high — wedges publishing | S |
 | [P2-2](#p2-2) | `oracle-manifest.R` | the build-identity guard can never fire | low | high — publishes an image stamped `unknown` | S |
-| [P2-3](#p2-3) | `retag.yml` | source-digest check fails with no annotation | medium | low — operator confusion only | XS |
 | [P2-4](#p2-4) | `retag.yml` / `publish.yml` | the two tag patterns disagree | very low | medium — retag refuses a real tag | XS |
 | [P2-5](#p2-5) | `Dockerfile` | label keys were renamed without a note | low | low — a filter silently matches nothing | XS |
 | [P2-6](#p2-6) | `README.md` | the retired `sha-<12>` tag is undocumented | low | low — a stale pin with no explanation | XS |
@@ -104,30 +103,6 @@ current design is deliberate and worth preserving.
 
 **Acceptance.** A build with a deliberately misspelled build-arg key fails, and a
 plain local `docker build` still succeeds.
-
----
-
-### P2-3
-
-**`retag.yml` verifies the source digest with the tool this repo argues is
-unreliable.** `.github/workflows/retag.yml:128-129`
-
-```yaml
-- name: Verify the source digest exists
-  run: docker manifest inspect '${{ steps.meta.outputs.ref }}' >/dev/null
-```
-
-`check-tag-free.sh`'s header explains why `docker manifest inspect` was rejected
-for the tag guard: it exits non-zero for absent, unauthorised, rate-limited and
-network-dead alike. Here it fails **closed**, so it is safe — a transient
-registry failure aborts the retag, which is the right outcome. The defect is only
-in the reporting: a bare non-zero exit with no `::error` annotation, which is
-exactly the "which failure was this?" confusion the script was written to remove.
-
-**Trigger.** Any transient GHCR failure during a retag run.
-
-**Fix.** Wrap it the way the tag guard is wrapped, and distinguish "digest absent"
-(operator error — check the catalog) from "registry unreachable" (retry).
 
 ---
 
@@ -288,6 +263,7 @@ Fixed before PR #3 merged; listed so this file's scope is unambiguous.
 | P1 | `cancel-in-progress: true` opened a tag/catalog desync window | `fdca7bc` |
 | — | `retag.yml` header contradicted its own catalog gate | `fdca7bc` |
 | — | `retag.yml` validated against the dispatched ref's catalog | `fdca7bc` |
+| P2-3 | `retag.yml` checked the source digest with a bare `docker manifest inspect`, no annotation | superseded — that step is gone; `point-tag-at-digest.sh` reports the HTTP status |
 
 Full reasoning is in the review threads on
 [PR #3](https://github.com/jonathancrawford05/R-Gam-base/pull/3).
