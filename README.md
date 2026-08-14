@@ -9,6 +9,70 @@ The value of an oracle is that its answers do not move. If a comparison fails,
 that has to mean *your* implementation changed — never that the reference did.
 Everything below exists to make that true.
 
+## Pin by digest. Always.
+
+This image is a **numerical oracle**: a downstream project runs `mgcv` inside it,
+commits the numbers as reference values, and asserts its own implementation
+reproduces them. An image reference that appears in a recorded measurement must
+therefore denote exactly one build, forever.
+
+```yaml
+# correct - a digest cannot be re-pointed
+container: ghcr.io/jonathancrawford05/r-gam-base@sha256:8853bf2b600f6ce0fcae8e29d0a78e4b95ed3603dacb4f5cafa49e7c29606b7c
+```
+
+Never pin a tag, not even an immutable one. Tags are for humans reading
+[`BUILDS.md`](BUILDS.md); digests are for machines and for anything written down.
+
+### The tag scheme
+
+```
+r<R version>-cran<snapshot date>-b<build number>     e.g. r4.6.1-cran2026-08-01-b2
+```
+
+| tag | moves? | use it for |
+| --- | --- | --- |
+| `r4.6.1-cran2026-08-01-b2` | **never** | reading, and finding a build in the catalog |
+| `latest` | yes, every publish | scratch work only |
+| `r4.6.1-latest` | yes, every publish | scratch work on a given R line |
+| `r4.6.1-2026-08-01` | **deprecated** | nothing — see below |
+
+**Immutable tags are never reused.** A rebuild gets a new build number even when
+R and the snapshot are unchanged, because two builds are two artifacts. CI
+refuses to push a tag that already exists rather than trusting anyone to
+remember. Floating tags are deliberately named so nobody could mistake one for a
+pin, and **must not appear in any recorded measurement, CI pin, or report**.
+
+> **`r4.6.1-2026-08-01` is deprecated and must not be used.** It was moved from
+> build 1 to build 2, so it denotes two different builds at two different times
+> with nothing in the name to tell them apart. It is still truthful — still R
+> 4.6.1, still that snapshot — which is exactly what makes it dangerous. Use
+> `-b1` or `-b2`, or better, a digest.
+
+### What produced this?
+
+```bash
+docker run --rm ghcr.io/jonathancrawford05/r-gam-base@sha256:<digest> \
+  cat /opt/oracle-manifest.json
+```
+
+Every version in it is read from the installed library at build time, not from a
+spec file — it records what *is* in the image, not what was requested. `docker
+inspect` also answers the identity question from labels alone, without pulling
+the filesystem. From build 3 onward both carry the build number, the build
+timestamp and the git SHA of this repo.
+
+## Every build is catalogued
+
+[`BUILDS.md`](BUILDS.md) is append-only, one row per published build, keyed by
+full digest. When a new build is published, the handoff to a consumer is **the
+digest plus its catalog row** — a tag name alone is not sufficient.
+
+**A change to `mgcv` is treated as material** and called out prominently, because
+downstream numerical references may need re-measuring. A quiet `mgcv` bump inside
+an otherwise-routine rebuild is the most expensive thing that could happen to a
+consumer, so the build asserts the locked versions rather than trusting review.
+
 ## What is pinned, and why
 
 | Layer | Pinned by | Why it would otherwise drift |
@@ -30,23 +94,33 @@ Two notes on the base image, both of which are easy to get wrong:
   deliberate choice rather than a side effect of which R release the base
   happens to track.
 
-The resolved versions are frozen into `/opt/oracle/manifest.json` at build time
-(also reachable as `/opt/versions.json`) and embedded in **every** reference
-output, so "which mgcv produced this number" is answerable from the artifact
-alone. To stamp your own output with what produced it:
+The resolved versions are frozen into the image at build time and embedded in
+**every** reference output, so "which mgcv produced this number" is answerable
+from the artifact alone.
 
-```bash
-docker run --rm ghcr.io/jonathancrawford05/r-gam-base@sha256:<digest> \
-  cat /opt/versions.json
-```
+| path | schema | what it is |
+| --- | --- | --- |
+| `/opt/oracle-manifest.json` | 2 | Build identity + installed versions. **Read this one.** Present from build 3. |
+| `/opt/oracle/manifest.json` | 1 | The harness's own copy, embedded in every reference output. |
+| `/opt/versions.json` | 1 | Alias of `/opt/oracle/manifest.json`, unchanged. |
+
+`/opt/versions.json` deliberately still points at the schema-1 file. The two
+schemas differ — schema 2 drops `r_svn_rev` and moves `built_at` under `image` —
+so re-pointing the alias would leave an existing reader's `.built_at` silently
+`null`. A path that stays truthful-looking while what it denotes changes
+underneath is the same failure as a moved tag, and it gets the same answer here:
+new name for new content.
 
 ## Use it
 
 ```bash
-docker pull ghcr.io/jonathancrawford05/r-gam-base:latest
-docker run --rm -v "$PWD/out:/work/out" \
-  ghcr.io/jonathancrawford05/r-gam-base:latest \
-  Rscript /opt/oracle/run.R --out /work/out
+# Scratch work only -- `latest` moves on every publish.
+IMG=ghcr.io/jonathancrawford05/r-gam-base:latest
+
+# Anything whose output you intend to keep: pin the digest.
+IMG=ghcr.io/jonathancrawford05/r-gam-base@sha256:8853bf2b600f6ce0fcae8e29d0a78e4b95ed3603dacb4f5cafa49e7c29606b7c
+
+docker run --rm -v "$PWD/out:/work/out" "$IMG" Rscript /opt/oracle/run.R --out /work/out
 ```
 
 In the consuming repository's CI, as a job container — the workspace is mounted
@@ -63,7 +137,8 @@ mgcv-conformance:
     - run: <compare reference/ against the Polaris RE implementation>
 ```
 
-The digest for each build is printed in that run's GitHub Actions job summary.
+The digest for each build is printed in that run's GitHub Actions job summary and
+recorded in [`BUILDS.md`](BUILDS.md).
 
 ## Boosting with mboost
 
@@ -192,3 +267,11 @@ Deliberately a reviewable commit, never automatic:
 
 That way an mgcv update can never silently change the reference — it always
 arrives as a diff someone approved.
+
+## Known gaps
+
+[`BACKLOG.md`](BACKLOG.md) lists the findings that were deliberately deferred and
+the limitations that are accepted rather than fixed, each with the condition that
+would make it matter. None of them affect the correctness of the publish path
+today. Read it before changing `publish.yml` or `retag.yml` — two of the entries
+are traps that look like tidying up.

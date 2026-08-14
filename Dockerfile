@@ -19,6 +19,14 @@ ARG R_VERSION
 ARG BASE_DIGEST
 ARG CRAN_SNAPSHOT=2026-08-01
 
+# Build identity. Supplied by CI; defaulted to "unknown" so a local `docker build`
+# still works and is visibly unidentified rather than falsely stamped.
+ARG IMAGE_TAG=unknown
+ARG BUILD_NUMBER=0
+ARG BUILD_CREATED=unknown
+ARG SOURCE_REVISION=unknown
+ARG SOURCE_REPO=https://github.com/jonathancrawford05/R-Gam-base
+
 ENV BASE_IMAGE_DIGEST=${BASE_DIGEST} \
     CRAN_SNAPSHOT=${CRAN_SNAPSHOT} \
     CRAN=https://p3m.dev/cran/__linux__/noble/${CRAN_SNAPSHOT}
@@ -61,17 +69,42 @@ RUN Rscript /opt/oracle/mboost_smoke.R
 # this block, so "which mgcv produced this number" is answerable from the
 # artifact alone.
 RUN Rscript /opt/oracle/build-manifest.R /opt/oracle/manifest.json \
-    && ln -s /opt/oracle/manifest.json /opt/versions.json \
+    && ln -sf /opt/oracle/manifest.json /opt/versions.json \
     && cat /opt/oracle/manifest.json
+
+# The build-identity manifest, at the fixed path a consumer reads:
+#   docker run --rm <image> cat /opt/oracle-manifest.json
+# Versions come from the installed library, so it records what IS here rather
+# than what was asked for.
+#
+# This is ADDITIVE. /opt/versions.json deliberately still points at
+# /opt/oracle/manifest.json above, because the two files are different schemas:
+# v2 drops r_svn_rev and moves built_at under `image`. Re-pointing the alias
+# would leave an existing reader's `.built_at` silently null -- a path that stays
+# truthful-looking while what it denotes changes underneath, which is precisely
+# the failure this repo's tag policy exists to prevent.
+COPY scripts/oracle-manifest.R /opt/oracle/oracle-manifest.R
+RUN IMAGE_TAG="${IMAGE_TAG}" BUILD_NUMBER="${BUILD_NUMBER}" \
+    BUILD_CREATED="${BUILD_CREATED}" SOURCE_REVISION="${SOURCE_REVISION}" \
+    SOURCE_REPO="${SOURCE_REPO}" \
+    Rscript /opt/oracle/oracle-manifest.R /opt/oracle-manifest.json \
+    && cat /opt/oracle-manifest.json
 
 ENV ORACLE_HOME=/opt/oracle
 WORKDIR /work
 
-LABEL org.opencontainers.image.source="https://github.com/jonathancrawford05/R-Gam-base" \
-      org.opencontainers.image.description="Digest-pinned R + mgcv reference environment producing independent GAM outputs for validating Polaris RE." \
+# `docker inspect` alone should answer "what is this", without pulling the
+# filesystem or knowing anything about the image's internals.
+ARG IMAGE_DESCRIPTION="Digest-pinned R + mgcv + mboost reference environment producing independent GAM outputs for validating Polaris RE."
+LABEL org.opencontainers.image.source="${SOURCE_REPO}" \
+      org.opencontainers.image.version="${IMAGE_TAG}" \
+      org.opencontainers.image.created="${BUILD_CREATED}" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.description="${IMAGE_DESCRIPTION}" \
       org.opencontainers.image.licenses="MIT" \
-      io.polaris.oracle.r-version="${R_VERSION}" \
-      io.polaris.oracle.cran-snapshot="${CRAN_SNAPSHOT}" \
-      io.polaris.oracle.base-digest="${BASE_DIGEST}"
+      io.polaris.r-version="${R_VERSION}" \
+      io.polaris.cran-snapshot="${CRAN_SNAPSHOT}" \
+      io.polaris.build-number="${BUILD_NUMBER}" \
+      io.polaris.base-digest="${BASE_DIGEST}"
 
 CMD ["R"]

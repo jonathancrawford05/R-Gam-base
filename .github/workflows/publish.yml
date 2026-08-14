@@ -5,6 +5,10 @@ on:
     # Feature branches build and selftest but never publish; see the PUBLISH
     # gate below.
     branches: [main, "claude/**"]
+    # The publish job appends to BUILDS.md and pushes it to main. Without this
+    # the catalog commit would retrigger the workflow, which would publish a new
+    # build, which would append another row -- forever.
+    paths-ignore: ["BUILDS.md"]
   pull_request:
   # Monthly rebuild. It moves nothing: the base is digest-pinned and CRAN is
   # snapshot-pinned, so this cannot pull in base-OS patches either. What it
@@ -16,23 +20,38 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # the publish job appends the BUILDS.md row
   packages: write
 
 concurrency:
   group: publish-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a run that might be publishing. Pushing the image tag and
+  # appending the BUILDS.md row are two steps with no transaction around them: a
+  # cancel landing between them leaves a tag in the registry with no catalog row,
+  # which silently consumes a build number and wedges the next publish until
+  # someone hand-edits the file. Branch and PR runs publish nothing, so they stay
+  # cancellable and keep saving the CI minutes this setting was added for.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   image:
     runs-on: ubuntu-latest
-    # Publishing is deliberately narrow: main, the monthly rebuild, or an
-    # explicit dispatch. Everything else builds and tests without pushing, so a
-    # feature branch can prove the image is sound without moving :latest.
+    # Publishing requires BOTH a publishing event AND the default branch.
+    # Everything else builds and tests without pushing, so a feature branch can
+    # prove the image is sound without moving a tag.
+    #
+    # The ref condition is not decoration. This job pushes image tags and commits
+    # BUILDS.md back with `git push origin HEAD:main`. A workflow_dispatch from a
+    # feature branch would put HEAD on that branch, and the rebase-and-push would
+    # carry every commit on it onto main -- merging unreviewed work with no PR,
+    # or, if main is protected, failing AFTER the image tag was already pushed and
+    # leaving exactly the tag/catalog desync the guard exists to prevent.
+    # `schedule` only ever runs on the default branch, so this costs it nothing.
     env:
-      PUBLISH: ${{ github.event_name == 'schedule'
-        || github.event_name == 'workflow_dispatch'
-        || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+      PUBLISH: ${{ github.ref == 'refs/heads/main'
+        && (github.event_name == 'schedule'
+            || github.event_name == 'workflow_dispatch'
+            || github.event_name == 'push') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,13 +65,71 @@ jobs:
           snapshot=$(sed -n 's/^ARG CRAN_SNAPSHOT=//p' Dockerfile | head -1)
           # GHCR requires a lowercase path; this repository is "R-Gam-base".
           image="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+
+          # The build number is what makes a tag unique when the version fields
+          # cannot: two builds with the same R and the same snapshot are still two
+          # builds. BUILDS.md is the source of truth rather than the registry, so
+          # the catalog can never fall behind the tag it describes.
+          last=$(grep -oE 'r[0-9.]+-cran[0-9-]+-b[0-9]+' BUILDS.md 2>/dev/null \
+                 | sed 's/.*-b//' | sort -n | tail -1)
+          build_number=$(( ${last:-0} + 1 ))
+          tag="r${r_version}-cran${snapshot}-b${build_number}"
+          created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
           {
             echo "image=$image"
             echo "r_version=$r_version"
             echo "snapshot=$snapshot"
-            echo "version_tag=r${r_version}-${snapshot}"
-            echo "sha_tag=sha-$(echo '${{ github.sha }}' | cut -c1-12)"
+            echo "build_number=$build_number"
+            echo "tag=$tag"
+            echo "created=$created"
+            echo "float_tag=r${r_version}-latest"
           } >> "$GITHUB_OUTPUT"
+          echo "resolved build $build_number -> $image:$tag"
+
+      # Log in first: the tag guard must query the registry with credentials, so
+      # that an auth failure is a distinguishable error rather than a 401 it
+      # might mistake for something else.
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags are immutable and never reused. This is FAIL-CLOSED: it publishes
+      # only on a definite 404. `docker manifest inspect` was rejected here
+      # because it exits non-zero for "absent", "unauthorised", "rate limited"
+      # and "network died" alike -- so the one time the registry is unreachable
+      # it would report the tag as free and quietly move it.
+      - name: Refuse to reuse an existing tag
+        if: env.PUBLISH == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          # Actions runs `run:` under `bash -e`, and `set -uo pipefail` does not
+          # clear the inherited -e. Without `set +e` the script's non-zero exit
+          # aborts the step here, `rc=$?` never runs, and every message below is
+          # dead code: the step still fails, but the operator is told nothing
+          # about which failure it was or how to recover.
+          set +e
+          bash scripts/check-tag-free.sh \
+            '${{ steps.meta.outputs.image }}' '${{ steps.meta.outputs.tag }}'
+          rc=$?
+          set -e
+          case "$rc" in
+            0)  echo "tag is free; proceeding" ;;
+            10) echo "::error title=Tag already exists::${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }} \
+          is already published. Tags are immutable and are never re-pointed. Append the missing \
+          row to BUILDS.md so the build number advances, then re-run."
+                exit 1 ;;
+            *)  echo "::error title=Cannot verify tag state::The registry did not give a definite \
+          answer for ${{ steps.meta.outputs.tag }}. Refusing to publish: treating an unreachable \
+          registry as 'tag is free' is how an immutable tag silently moves."
+                exit 1 ;;
+          esac
 
       - uses: docker/setup-buildx-action@v3
 
@@ -66,6 +143,12 @@ jobs:
           tags: oracle-local:candidate
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            IMAGE_TAG=${{ steps.meta.outputs.tag }}
+            BUILD_NUMBER=${{ steps.meta.outputs.build_number }}
+            BUILD_CREATED=${{ steps.meta.outputs.created }}
+            SOURCE_REVISION=${{ github.sha }}
+            SOURCE_REPO=${{ github.server_url }}/${{ github.repository }}
 
       - name: Selftest
         run: docker run --rm oracle-local:candidate Rscript /opt/oracle/selftest.R
@@ -85,28 +168,73 @@ jobs:
           name: reference-outputs
           path: out/
 
-      - name: Log in to GHCR
-        if: env.PUBLISH == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Push
         id: push
         if: env.PUBLISH == 'true'
         run: |
           set -euo pipefail
           image='${{ steps.meta.outputs.image }}'
-          for tag in latest '${{ steps.meta.outputs.version_tag }}' '${{ steps.meta.outputs.sha_tag }}'; do
-            docker tag oracle-local:candidate "$image:$tag"
-            docker push "$image:$tag" | tee -a /tmp/push.log
-          done
-          digest=$(grep -o 'sha256:[0-9a-f]\{64\}' /tmp/push.log | tail -1)
+          tag='${{ steps.meta.outputs.tag }}'
+
+          # The immutable tag first, and its digest is the one recorded.
+          docker tag oracle-local:candidate "$image:$tag"
+          docker push "$image:$tag" | tee /tmp/push.log
+          digest=$(grep -oE 'sha256:[0-9a-f]{64}' /tmp/push.log | tail -1)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      # The consumer pins by digest, so make the digest impossible to miss.
+          # Floating pointers. These DO move by design, which is why they are
+          # named so that nobody could mistake one for a pin.
+          for f in latest '${{ steps.meta.outputs.float_tag }}'; do
+            docker tag oracle-local:candidate "$image:$f"
+            docker push "$image:$f" >/dev/null
+            echo "moved floating tag $f -> $digest"
+          done
+
+      # Read the versions back out of the image that was just pushed, rather
+      # than restating what the Dockerfile asked for.
+      - name: Read versions from the published image
+        id: versions
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm oracle-local:candidate cat /opt/oracle-manifest.json > /tmp/m.json
+          cat /tmp/m.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          m = json.load(open("/tmp/m.json"))
+          p = m.get("packages", {})
+          print(f"mgcv={p.get('mgcv','-')}")
+          print(f"mboost={p.get('mboost','-')}")
+          PY
+
+      # The catalog is the artifact a consumer actually reads; appending here is
+      # what stops it falling behind the registry.
+      - name: Append the BUILDS.md row
+        # Stated again rather than inherited: this is the step that writes to
+        # main, and it should be readable as safe without tracing PUBLISH.
+        if: env.PUBLISH == 'true' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          row="| ${{ steps.meta.outputs.build_number }} \
+          | \`${{ steps.meta.outputs.tag }}\` \
+          | \`${{ steps.push.outputs.digest }}\` \
+          | ${{ steps.meta.outputs.r_version }} \
+          | ${{ steps.meta.outputs.snapshot }} \
+          | ${{ steps.versions.outputs.mgcv }} \
+          | ${{ steps.versions.outputs.mboost }} \
+          | ${{ steps.meta.outputs.created }} \
+          | \`${{ github.sha }}\` \
+          | _(pending: describe this build)_ |"
+          echo "$row" | tr -s ' ' >> BUILDS.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BUILDS.md
+          git commit -m "catalog: build ${{ steps.meta.outputs.build_number }} (${{ steps.meta.outputs.tag }}) [skip ci]"
+          # Rebase rather than force: a concurrent commit to main must not be lost.
+          git pull --rebase --autostash origin main
+          git push origin HEAD:main
+
       - name: Summary
         if: env.PUBLISH == 'true'
         run: |
@@ -117,14 +245,19 @@ jobs:
             echo
             echo "| field | value |"
             echo "| --- | --- |"
-            echo "| image | \`$image\` |"
+            echo "| immutable tag | \`${{ steps.meta.outputs.tag }}\` |"
+            echo "| digest | \`$digest\` |"
             echo "| R | \`${{ steps.meta.outputs.r_version }}\` |"
             echo "| CRAN snapshot | \`${{ steps.meta.outputs.snapshot }}\` |"
-            echo "| digest | \`$digest\` |"
+            echo "| mgcv | \`${{ steps.versions.outputs.mgcv }}\` |"
+            echo "| mboost | \`${{ steps.versions.outputs.mboost }}\` |"
             echo
-            echo "Pin this in the consuming repository:"
+            echo "**Pin by digest.** Tags, even the immutable one, are for humans:"
             echo
             echo '```yaml'
             echo "    container: $image@$digest"
             echo '```'
+            echo
+            echo "A row has been appended to BUILDS.md. Please replace its"
+            echo "_(pending)_ note with a sentence saying what actually changed."
           } >> "$GITHUB_STEP_SUMMARY"

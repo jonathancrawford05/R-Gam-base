@@ -1,0 +1,195 @@
+# =============================================================================
+# Give an already-published digest an additional immutable tag.
+# =============================================================================
+# This does NOT rebuild. `buildx imagetools create` copies the existing manifest
+# under a new name, so the digest is unchanged and anything already validated
+# against it stays valid. That is the whole reason this workflow exists rather
+# than a "rebuild with the right tag" job: a rebuild would produce different
+# bytes, and a digest that a downstream project has recorded as a numerical
+# reference must never be invalidated for a naming problem.
+#
+# It also prints the image's recorded versions, so a build published before the
+# manifest/label policy existed can be CONFIRMED by inspection. Note the ordering:
+# the catalog row must already exist before this will run (see the gate below), so
+# inspection here verifies a row that was written from the publishing run's logs
+# or from `docker run <ref> cat /opt/oracle/manifest.json` locally. Catalog first,
+# then tag, then confirm.
+#
+# Usage: Actions -> "retag" -> Run workflow, supply the digest and the new tag.
+# =============================================================================
+
+name: retag
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "Existing digest to tag, e.g. sha256:8853bf2b..."
+        required: true
+        type: string
+      tag:
+        description: "New immutable tag, e.g. r4.6.1-cran2026-08-01-b2"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  retag:
+    name: Retag an existing digest
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to main, not the dispatched ref. The gate below validates against
+      # BUILDS.md, and a dispatch from a stale branch would otherwise check
+      # against a stale catalog -- passing a digest that main has never heard of.
+      # It also means the tag guard runs main's reviewed copy of the script.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Resolve and validate inputs
+        id: meta
+        run: |
+          set -euo pipefail
+          image="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          digest='${{ inputs.digest }}'
+          tag='${{ inputs.tag }}'
+
+          if ! echo "$digest" | grep -qE '^sha256:[0-9a-f]{64}$'; then
+            echo "::error title=Malformed digest::'$digest' is not a full sha256:<64 hex>. \
+          The catalog's primary key is the full digest; an abbreviation is not acceptable here."
+            exit 1
+          fi
+          # Refuse a name that looks specific but is not part of the scheme, and
+          # refuse the floating names outright -- those are moved by publish, not here.
+          if ! echo "$tag" | grep -qE '^r[0-9]+\.[0-9]+\.[0-9]+-cran[0-9]{4}-[0-9]{2}-[0-9]{2}-b[0-9]+$'; then
+            echo "::error title=Tag does not match the scheme::'$tag' must look like \
+          r<R>-cran<YYYY-MM-DD>-b<N>, e.g. r4.6.1-cran2026-08-01-b2."
+            exit 1
+          fi
+          # The catalog must already know this digest.
+          #
+          # publish.yml derives the next build number by grepping BUILDS.md, so a
+          # tag minted here and never recorded silently consumes a number: the
+          # catalog still tops out at the old value, a later publish derives a
+          # number this workflow already used, and the tag guard then blocks
+          # publishing until someone hand-edits the file -- with nothing to
+          # connect that failure to a retag run from weeks earlier. Requiring the
+          # row first keeps the invariant and keeps this workflow free of write
+          # access to the repository.
+          if ! grep -qF "$digest" BUILDS.md; then
+            echo "::error title=Digest is not catalogued::$digest does not appear in \
+          BUILDS.md. Append its row first -- the catalog is the source of truth for build \
+          numbers, and a tag it does not know about will wedge a later publish."
+            exit 1
+          fi
+          if ! grep -qF "$tag" BUILDS.md; then
+            echo "::error title=Tag is not catalogued::BUILDS.md does not mention '$tag'. \
+          The row for this digest must name the tag being applied."
+            exit 1
+          fi
+
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "ref=$image@$digest" >> "$GITHUB_OUTPUT"
+          echo "target=$image:$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fail-closed, same as publish: only a definite 404 lets the retag proceed.
+      - name: Refuse to reuse an existing tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          # Actions runs `run:` under `bash -e`; `set -uo pipefail` does not clear
+          # it, so without this the case below never executes.
+          set +e
+          bash scripts/check-tag-free.sh \
+            '${{ steps.meta.outputs.image }}' '${{ inputs.tag }}'
+          rc=$?
+          set -e
+          case "$rc" in
+            0)  echo "tag is free; proceeding" ;;
+            10) echo "::error title=Tag already exists::${{ steps.meta.outputs.target }} is already \
+          published. Tags are immutable and are never re-pointed."
+                exit 1 ;;
+            *)  echo "::error title=Cannot verify tag state::Refusing to retag without a definite \
+          answer from the registry."
+                exit 1 ;;
+          esac
+
+      - name: Verify the source digest exists
+        run: docker manifest inspect '${{ steps.meta.outputs.ref }}' >/dev/null
+
+      # Copies the manifest. No build, no new digest.
+      - name: Apply the tag
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag '${{ steps.meta.outputs.target }}' \
+            '${{ steps.meta.outputs.ref }}'
+
+      # A retag that silently landed on different bytes would defeat the point.
+      - name: Confirm the tag resolves to the same digest
+        run: |
+          set -euo pipefail
+          got=$(docker buildx imagetools inspect '${{ steps.meta.outputs.target }}' \
+                --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "expected ${{ inputs.digest }}"
+          echo "got      $got"
+          [ "$got" = '${{ inputs.digest }}' ] || {
+            echo "::error title=Digest mismatch::the new tag does not point at the requested digest"
+            exit 1
+          }
+
+      # Catalog material for a build that predates the manifest policy.
+      - name: Report what is inside this image
+        run: |
+          set -euo pipefail
+          ref='${{ steps.meta.outputs.ref }}'
+          # /opt/oracle-manifest.json exists only from build 3 onward. Builds
+          # predating it still carry the harness manifest, so try that second --
+          # and if neither is present, say so instead of printing an empty block.
+          found=""
+          for path in /opt/oracle-manifest.json /opt/oracle/manifest.json; do
+            if docker run --rm "$ref" test -f "$path" 2>/dev/null; then
+              found="$path"; break
+            fi
+          done
+
+          {
+            echo "## Retagged"
+            echo
+            echo "- image: \`${{ steps.meta.outputs.target }}\`"
+            echo "- digest: \`${{ inputs.digest }}\`"
+            echo
+            if [ -n "$found" ]; then
+              echo "### Versions, read from the image (\`$found\`)"
+              echo
+              echo '```json'
+              docker run --rm "$ref" cat "$found"
+              echo '```'
+            else
+              echo "### Versions"
+              echo
+              echo "This image carries neither \`/opt/oracle-manifest.json\` nor"
+              echo "\`/opt/oracle/manifest.json\`. It predates both. Record its versions in"
+              echo "BUILDS.md from the workflow run that published it, and say so in the row."
+            fi
+            echo
+            echo "### Packages not covered by the older manifest"
+            echo
+            echo '```'
+            docker run --rm "$ref" Rscript -e \
+              'for (p in c("MASS","mgcv","mboost")) cat(p,
+                 tryCatch(as.character(packageVersion(p)), error = function(e) "absent"), "\n")' \
+              || echo "(could not run R in this image)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
