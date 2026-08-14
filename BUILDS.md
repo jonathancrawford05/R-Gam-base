@@ -179,4 +179,5 @@ match the build table exactly.
 The two `sha-<12>` tags are from a scheme dropped in PR #3: a repo SHA does not
 identify a build, and the monthly rebuild would eventually have pushed the same
 name onto a different digest. They happen to be unambiguous only because no
-rebuild has reused their SHA. See BACKLOG.md P2-6.
+rebuild has reused their SHA. The full explanation is in README.md's tag table;
+BACKLOG.md records the history under P2-6, now closed.
