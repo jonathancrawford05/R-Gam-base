@@ -267,3 +267,11 @@ Deliberately a reviewable commit, never automatic:
 
 That way an mgcv update can never silently change the reference — it always
 arrives as a diff someone approved.
+
+## Known gaps
+
+[`BACKLOG.md`](BACKLOG.md) lists the findings that were deliberately deferred and
+the limitations that are accepted rather than fixed, each with the condition that
+would make it matter. None of them affect the correctness of the publish path
+today. Read it before changing `publish.yml` or `retag.yml` — two of the entries
+are traps that look like tidying up.
