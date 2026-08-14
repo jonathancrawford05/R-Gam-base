@@ -29,7 +29,6 @@ is listed under [Closed](#closed) for reference.
 | [P2-2](#p2-2) | `oracle-manifest.R` | the build-identity guard can never fire | low | high — publishes an image stamped `unknown` | S |
 | [P2-4](#p2-4) | `retag.yml` / `publish.yml` | the two tag patterns disagree | very low | medium — retag refuses a real tag | XS |
 | [P2-5](#p2-5) | `Dockerfile` | label keys were renamed without a note | low | low — a filter silently matches nothing | XS |
-| [P2-6](#p2-6) | `README.md` | the retired `sha-<12>` tag is undocumented | low | low — a stale pin with no explanation | XS |
 | [P2-7](#p2-7) | `publish.yml` | a documentation-only push publishes a build | **high** | low — a redundant build, correctly catalogued | XS |
 
 ---
@@ -109,31 +108,6 @@ it is recorded rather than assumed harmless.
 **Fix.** A line in the README's identity section stating the rename and the build
 it took effect from. Re-adding the old keys as duplicates is possible but not
 recommended: two keys for one fact is how they drift apart.
-
----
-
-### P2-6
-
-**The retired `sha-<12>` tag is undocumented.** `README.md`, tag table
-
-Builds 1 and 2 also published a `sha-<first 12 of the repo SHA>` tag.
-`sha-0c6b56c31a88` and `sha-95182b33cc7b` are both present in GHCR — verified
-against the live registry, not inferred from the workflow — and resolve to builds
-1 and 2. PR #3 dropped the tag from the push loop, and the new tag table does not
-mention it ever existed.
-
-Dropping it was right, and the reason belongs in the record: a repo SHA does not
-identify a build. The monthly scheduled rebuild runs on an unchanged `main`, so
-it would have pushed the *same* `sha-<12>` tag onto a *different* digest — the
-identical failure as `r4.6.1-2026-08-01`, just less obviously.
-
-**Trigger.** Someone finds one of those two tags in the registry, or in an old
-note, and cannot tell whether it is safe to use.
-
-**Fix.** A deprecation line in the README's tag table next to
-`r4.6.1-2026-08-01`, saying the tag was retired after build 2, why, and that the
-two existing ones happen to be unambiguous only because no rebuild reused their
-SHA.
 
 ---
 
@@ -228,6 +202,7 @@ Fixed before PR #3 merged; listed so this file's scope is unambiguous.
 | — | `retag.yml` header contradicted its own catalog gate | `fdca7bc` |
 | — | `retag.yml` validated against the dispatched ref's catalog | `fdca7bc` |
 | P2-3 | `retag.yml` checked the source digest with a bare `docker manifest inspect`, no annotation | superseded — that step is gone; `point-tag-at-digest.sh` reports the HTTP status |
+| P2-6 | the retired `sha-<12>` tags were undocumented | fixed — two rows in README's tag table plus a callout, closing review P2-2 on PR #6 |
 | P2-1 | catalog checks grepped free-form Markdown instead of reading the table | promoted and fixed — it stopped being theoretical when it blocked the `-b1` correction; all catalog reads now go through `scripts/catalog.sh` |
 
 Full reasoning is in the review threads on

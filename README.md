@@ -36,6 +36,8 @@ r<R version>-cran<snapshot date>-b<build number>     e.g. r4.6.1-cran2026-08-01-
 | `latest` | yes, every publish | scratch work only |
 | `r4.6.1-latest` | yes, every publish | scratch work on a given R line |
 | `r4.6.1-2026-08-01` | **deprecated** | nothing — see below |
+| `sha-0c6b56c31a88` | **retired scheme** | nothing — see below |
+| `sha-95182b33cc7b` | **retired scheme** | nothing — see below |
 
 **Immutable tags are never reused.** A rebuild gets a new build number even when
 R and the snapshot are unchanged, because two builds are two artifacts. CI
@@ -48,6 +50,20 @@ pin, and **must not appear in any recorded measurement, CI pin, or report**.
 > with nothing in the name to tell them apart. It is still truthful — still R
 > 4.6.1, still that snapshot — which is exactly what makes it dangerous. Use
 > `-b1` or `-b2`, or better, a digest.
+
+> **The `sha-<12>` tags are retired and must not be used.** Builds 1 and 2 also
+> published a tag made from the first 12 characters of this repo's commit SHA;
+> `sha-0c6b56c31a88` and `sha-95182b33cc7b` are still in the registry and still
+> resolve to those two builds. They are listed here because they are the
+> trap-shaped ones: a commit SHA *looks* like a precise, pinnable identifier,
+> and someone browsing GHCR's tag list would find them with nothing to say
+> otherwise.
+>
+> A commit SHA does not identify a build. The monthly rebuild runs on an
+> unchanged `main`, so it would eventually have pushed the *same* `sha-<12>`
+> name onto a *different* digest — `r4.6.1-2026-08-01` again, less visibly.
+> The scheme was dropped after build 2. Those two happen to be unambiguous only
+> because no rebuild has yet reused their SHA, which is luck, not a property.
 
 ### What produced this?
 
