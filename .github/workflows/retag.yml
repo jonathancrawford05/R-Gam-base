@@ -1,12 +1,17 @@
 # =============================================================================
 # Give an already-published digest an additional immutable tag.
 # =============================================================================
-# This does NOT rebuild. `buildx imagetools create` copies the existing manifest
-# under a new name, so the digest is unchanged and anything already validated
-# against it stays valid. That is the whole reason this workflow exists rather
-# than a "rebuild with the right tag" job: a rebuild would produce different
-# bytes, and a digest that a downstream project has recorded as a numerical
-# reference must never be invalidated for a naming problem.
+# This does NOT rebuild, and it does not create a new manifest either. The tag
+# is written by re-PUTting the existing manifest's exact bytes under a new name,
+# so the digest is unchanged and anything already validated against it stays
+# valid. That is the whole reason this workflow exists rather than a "rebuild
+# with the right tag" job: a rebuild would produce different bytes, and a digest
+# that a downstream project has recorded as a numerical reference must never be
+# invalidated for a naming problem.
+#
+# It previously used `docker buildx imagetools create`, which turned out to do
+# something subtly different -- see scripts/point-tag-at-digest.sh for what and
+# why it produced a wrong tag before anyone noticed.
 #
 # It also prints the image's recorded versions, so a build published before the
 # manifest/label policy existed can be CONFIRMED by inspection. Note the ordering:
@@ -31,6 +36,13 @@ on:
         description: "New immutable tag, e.g. r4.6.1-cran2026-08-01-b2"
         required: true
         type: string
+      correct_mispointed:
+        description: >-
+          Repoint the tag if it exists but resolves to an UNCATALOGUED digest
+          (i.e. a failed earlier attempt). Never touches a catalogued build.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -44,7 +56,7 @@ jobs:
       # Pinned to main, not the dispatched ref. The gate below validates against
       # BUILDS.md, and a dispatch from a stale branch would otherwise check
       # against a stale catalog -- passing a digest that main has never heard of.
-      # It also means the tag guard runs main's reviewed copy of the script.
+      # It also means the guards run main's reviewed copies of the scripts.
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -95,15 +107,12 @@ jobs:
           echo "ref=$image@$digest" >> "$GITHUB_OUTPUT"
           echo "target=$image:$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Fail-closed, same as publish: only a definite 404 lets the retag proceed.
-      - name: Refuse to reuse an existing tag
+      # Fail-closed, same as publish: nothing proceeds without a definite answer
+      # from the registry. Three outcomes are acceptable, and they are different:
+      # absent (write it), already correct (nothing to do), and pointing at an
+      # uncatalogued digest with correction explicitly requested.
+      - name: Decide what to do about an existing tag
+        id: plan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -111,43 +120,93 @@ jobs:
           # Actions runs `run:` under `bash -e`; `set -uo pipefail` does not clear
           # it, so without this the case below never executes.
           set +e
-          bash scripts/check-tag-free.sh \
-            '${{ steps.meta.outputs.image }}' '${{ inputs.tag }}'
+          current=$(bash scripts/resolve-tag-digest.sh \
+            '${{ steps.meta.outputs.image }}' '${{ inputs.tag }}')
           rc=$?
           set -e
+
           case "$rc" in
-            0)  echo "tag is free; proceeding" ;;
-            10) echo "::error title=Tag already exists::${{ steps.meta.outputs.target }} is already \
-          published. Tags are immutable and are never re-pointed."
-                exit 1 ;;
-            *)  echo "::error title=Cannot verify tag state::Refusing to retag without a definite \
+            0)
+              echo "tag is absent; will create it"
+              echo "action=create" >> "$GITHUB_OUTPUT"
+              ;;
+            10)
+              echo "tag currently resolves to $current"
+              if [ "$current" = '${{ inputs.digest }}' ]; then
+                # Makes a re-run after a partial failure safe, which matters
+                # precisely because the failure mode this workflow had left a
+                # tag behind.
+                echo "already points at the requested digest; nothing to do"
+                echo "action=noop" >> "$GITHUB_OUTPUT"
+              elif [ '${{ inputs.correct_mispointed }}' != 'true' ]; then
+                echo "::error title=Tag already exists::${{ steps.meta.outputs.target }} \
+          resolves to $current, not ${{ inputs.digest }}. Tags are immutable and are never \
+          re-pointed. If this is the residue of a failed retag, re-run with \
+          correct_mispointed=true; that is refused unless $current is absent from BUILDS.md."
+                exit 1
+              elif grep -qF "$current" BUILDS.md; then
+                # The safety property that makes correction acceptable at all:
+                # a digest the catalog knows may be cited in a recorded
+                # measurement, so its tag is never taken away from it.
+                echo "::error title=Refusing to repoint a catalogued digest::$current appears \
+          in BUILDS.md, so it may be cited by a downstream measurement. correct_mispointed is \
+          only for tags left behind pointing at digests the catalog has never recorded."
+                exit 1
+              else
+                echo "$current is not in BUILDS.md; correcting the tag as requested"
+                echo "action=correct" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            *)
+              echo "::error title=Cannot verify tag state::Refusing to retag without a definite \
           answer from the registry."
-                exit 1 ;;
+              exit 1
+              ;;
           esac
 
-      - name: Verify the source digest exists
-        run: docker manifest inspect '${{ steps.meta.outputs.ref }}' >/dev/null
-
-      # Copies the manifest. No build, no new digest.
+      # Writes the tag by re-PUTting the manifest's exact bytes. The script
+      # verifies the fetched bytes hash to the requested digest before writing
+      # anything, and fails on any HTTP status it did not expect -- so a missing
+      # source digest and an unreachable registry are both reported here rather
+      # than surfacing as a bare non-zero exit.
       - name: Apply the tag
+        if: steps.plan.outputs.action != 'noop'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          docker buildx imagetools create \
-            --tag '${{ steps.meta.outputs.target }}' \
-            '${{ steps.meta.outputs.ref }}'
+          bash scripts/point-tag-at-digest.sh \
+            '${{ steps.meta.outputs.image }}' \
+            '${{ inputs.digest }}' \
+            '${{ inputs.tag }}'
 
-      # A retag that silently landed on different bytes would defeat the point.
-      - name: Confirm the tag resolves to the same digest
+      # Independently, from the registry rather than from the writer. A retag
+      # that silently landed on different bytes is exactly the failure that made
+      # this workflow's original implementation wrong.
+      - name: Confirm the tag resolves to the requested digest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          got=$(docker buildx imagetools inspect '${{ steps.meta.outputs.target }}' \
-                --format '{{json .Manifest.Digest}}' | tr -d '"')
+          set -uo pipefail
+          set +e
+          got=$(bash scripts/resolve-tag-digest.sh \
+            '${{ steps.meta.outputs.image }}' '${{ inputs.tag }}')
+          rc=$?
+          set -e
           echo "expected ${{ inputs.digest }}"
-          echo "got      $got"
-          [ "$got" = '${{ inputs.digest }}' ] || {
-            echo "::error title=Digest mismatch::the new tag does not point at the requested digest"
+          echo "got      $got (rc=$rc)"
+          if [ "$rc" != "10" ] || [ "$got" != '${{ inputs.digest }}' ]; then
+            echo "::error title=Digest mismatch::the tag does not point at the requested digest"
             exit 1
-          }
+          fi
+          echo "confirmed: ${{ steps.meta.outputs.target }} -> $got"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Catalog material for a build that predates the manifest policy.
       - name: Report what is inside this image
@@ -169,6 +228,7 @@ jobs:
             echo
             echo "- image: \`${{ steps.meta.outputs.target }}\`"
             echo "- digest: \`${{ inputs.digest }}\`"
+            echo "- action: \`${{ steps.plan.outputs.action }}\`"
             echo
             if [ -n "$found" ]; then
               echo "### Versions, read from the image (\`$found\`)"
