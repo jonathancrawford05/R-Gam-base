@@ -142,15 +142,26 @@ did not do what its documentation said:
 **Both digests are unchanged.** `a77a61cf` is the same digest polaris-re
 validated `tr(F)` against; nothing about it moved at any point in this exercise.
 
-`sha256:1971e750…` still exists in the registry, untagged and unreferenced. It
-is not a build and has no build number. GHCR has no per-tag delete and deleting
-the underlying version is not worth the risk near digests that are pinned, so it
-is left in place and recorded here instead.
+`sha256:1971e750…` still exists in the registry. Nothing points at it -- it
+carries no tag and appears in no measurement -- but it is itself a manifest list
+whose single child is `sha256:a77a61cf…`, build 1. That child relationship is
+the concrete reason it is left alone rather than a general caution: GHCR has no
+per-tag delete, so removing it means deleting a package *version* that
+references the digest polaris-re pins, and the blast radius of getting that
+wrong is the oracle itself. It is not a build, has no build number, and is
+recorded here instead of deleted.
 
-### Registry reconciliation, 2026-08-14
+### Registry reconciliation, as of build 5
 
-Every tag present, and what it resolves to. The five immutable tags match this
-table exactly.
+**A point-in-time snapshot, not maintained.** Nothing updates it, and the next
+publish makes three rows wrong at once: a `-b6` row goes missing and both
+floating tags move off `f77fd7ae`. It is tied to a build number rather than a
+date so that drift is self-evident from the catalog itself. `scripts/catalog.sh`
+and the registry are authoritative; this is here to record that the two agreed
+once, at a moment when that was in doubt.
+
+Every tag present at build 5, and what it resolved to. The five immutable tags
+match the build table exactly.
 
 | tag | digest | kind |
 | --- | --- | --- |
@@ -159,8 +170,8 @@ table exactly.
 | `r4.6.1-cran2026-08-01-b3` | `sha256:9ea27ff8…` | immutable |
 | `r4.6.1-cran2026-08-01-b4` | `sha256:e295b0e2…` | immutable |
 | `r4.6.1-cran2026-08-01-b5` | `sha256:f77fd7ae…` | immutable |
-| `latest` | `sha256:f77fd7ae…` | floating |
-| `r4.6.1-latest` | `sha256:f77fd7ae…` | floating |
+| `latest` | `sha256:f77fd7ae…` | floating — **moves every publish** |
+| `r4.6.1-latest` | `sha256:f77fd7ae…` | floating — **moves every publish** |
 | `r4.6.1-2026-08-01` | `sha256:8853bf2b…` | **deprecated**, do not use |
 | `sha-0c6b56c31a88` | `sha256:a77a61cf…` | retired scheme, do not use |
 | `sha-95182b33cc7b` | `sha256:8853bf2b…` | retired scheme, do not use |
