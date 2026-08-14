@@ -53,3 +53,4 @@ than produced by it. Specifically:
 - MASS is not recorded for these two builds: it was not in their manifest package
   list and could not be read without running the images. It is recorded from
   build 3 onward.
+| 3 | `r4.6.1-cran2026-08-01-b3` | `sha256:9ea27ff8103aff292ec775e85a1d7ca810f7ea43dcde49d40ab210c13c591aaa` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T12:28:08Z | `c9cb8939255d3f13ec61fa7278c6ce471805104d` | _(pending: describe this build)_ |
