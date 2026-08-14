@@ -29,7 +29,7 @@ is listed under [Closed](#closed) for reference.
 | [P2-2](#p2-2) | `oracle-manifest.R` | the build-identity guard can never fire | low | high — publishes an image stamped `unknown` | S |
 | [P2-4](#p2-4) | `retag.yml` / `publish.yml` | the two tag patterns disagree | very low | medium — retag refuses a real tag | XS |
 | [P2-5](#p2-5) | `Dockerfile` | label keys were renamed without a note | low | low — a filter silently matches nothing | XS |
-| [P2-7](#p2-7) | `publish.yml` | a documentation-only push publishes a build | **high** | low — a redundant build, correctly catalogued | XS |
+| [P2-7](#p2-7) | `publish.yml` | any push that cannot change the image still publishes a build | **high** | low — a redundant build, correctly catalogued | S |
 
 ---
 
@@ -113,7 +113,7 @@ recommended: two keys for one fact is how they drift apart.
 
 ### P2-7
 
-**A documentation-only push to `main` publishes an image.**
+**Any push that cannot change the image still publishes a build.**
 `.github/workflows/publish.yml:3-11`
 
 ```yaml
@@ -124,27 +124,71 @@ on:
 ```
 
 Only `BUILDS.md` is excluded, and only because its own catalog commit would
-otherwise retrigger the workflow forever. Every other path publishes — so editing
-`README.md`, or this file, mints a build number, pushes a new immutable tag,
-moves the floating tags and appends a catalog row, for an image whose bytes are
-very likely identical to the previous one.
+otherwise retrigger the workflow forever. Every other path publishes: a new
+build number, a new immutable tag, both floating tags moved, a catalog row —
+for an image whose bytes are identical apart from the labels recording that it
+is a different build.
 
-**Trigger.** Any docs commit to `main`. This is the most likely trigger in the
-list, which is why it is worth a line even though the consequence is mild.
+**This was originally written as "a documentation-only push", which was too
+narrow and made the item look cheaper than it is.** Builds 4, 5 and 6 are all
+redundant, but only build 6 came from a docs-only merge:
+
+| build | published by | non-`.md` files changed |
+| --- | --- | --- |
+| 4 | merge of #4 | `publish.yml`, `retag.yml`, `point-tag-at-digest.sh`, `resolve-tag-digest.sh` |
+| 5 | merge of #5 | `publish.yml`, `retag.yml`, `catalog.sh` |
+| 6 | merge of #7 | *(none — docs only)* |
+
+Nothing in `.github/` is a Docker build input, and neither are the CI-only shell
+scripts. So a `paths-ignore` of `**/*.md` — the obvious fix, and the one this
+entry used to propose — would have prevented **one** of those three, and whoever
+shipped it would see the next workflow tweak publish a build and reopen the item.
+
+**Trigger.** Any push to `main` that touches no Docker build input. That is most
+maintenance work on this repository.
 
 **Cost.** Low and self-correcting rather than dangerous: the build is real, its
-digest is real, and the catalog row is accurate. The waste is CI minutes and a
-gap in the build sequence that means nothing.
+digest is real, the catalog row is accurate, and the tag guard is unaffected. The
+waste is CI minutes, plus a build sequence with gaps that mean nothing — which
+quietly weakens the catalog's usefulness as a narrative.
 
-**Fix.** Extend `paths-ignore` to the documentation that cannot affect the image
-— `README.md`, `BACKLOG.md`, `LICENSE`, `**/*.md` — leaving `workflow_dispatch`
-as the way to force a rebuild anyway.
+**Fix.** Extend `paths-ignore` to everything that cannot reach the image:
 
-Deliberately **not** bundled with this file: it changes when the publish path
-runs, which is the part of the workflow that got the most review scrutiny, and it
-should arrive as its own reviewable diff rather than riding along with a
-documentation commit. Note also that `paths-ignore` must never grow to cover
-`oracle/`, `scripts/` or the `Dockerfile` — those do change the numbers.
+```yaml
+paths-ignore:
+  - "**/*.md"
+  - "LICENSE"
+  - ".github/**"
+  - "scripts/catalog.sh"
+  - "scripts/check-tag-free.sh"
+  - "scripts/resolve-tag-digest.sh"
+  - "scripts/point-tag-at-digest.sh"
+```
+
+**The build inputs, which must never appear in that list**, are exactly the
+Dockerfile and what it `COPY`s:
+
+| path | why it reaches the image |
+| --- | --- |
+| `Dockerfile` | the recipe |
+| `oracle/**` | copied to `/opt/oracle/` |
+| `scripts/build-manifest.R` | copied, and runs at build time |
+| `scripts/assert-pinned-versions.R` | copied, and gates the build |
+| `scripts/oracle-manifest.R` | copied, writes the identity manifest |
+
+Note the direction the mechanism fails in, because it is the reason to keep
+`paths-ignore` rather than switch to an allowlist: forgetting to ignore a new
+documentation file costs a redundant build, while forgetting to *list* a new
+build input under `paths:` would mean a real change silently never publishes.
+A deny-list is wrong in the cheap direction.
+
+**Acceptance.** A commit touching only `README.md` and a commit touching only
+`.github/workflows/retag.yml` each run no publish job; a commit touching
+`oracle/lib_reference.R` still does.
+
+**Still deliberately not bundled with a documentation change.** It alters when
+the publish path runs, which is the most heavily reviewed part of the workflow,
+and belongs in its own reviewable diff.
 
 ---
 
