@@ -91,15 +91,19 @@ jobs:
           # connect that failure to a retag run from weeks earlier. Requiring the
           # row first keeps the invariant and keeps this workflow free of write
           # access to the repository.
-          if ! grep -qF "$digest" BUILDS.md; then
-            echo "::error title=Digest is not catalogued::$digest does not appear in \
+          #
+          # Read the TABLE, not the file. BUILDS.md's prose discusses digests and
+          # tags -- including ones that must never be used -- so a plain grep
+          # answers "is this mentioned", which is a different question.
+          if ! bash scripts/catalog.sh digests | grep -qxF "$digest"; then
+            echo "::error title=Digest is not catalogued::$digest is not in a build row of \
           BUILDS.md. Append its row first -- the catalog is the source of truth for build \
           numbers, and a tag it does not know about will wedge a later publish."
             exit 1
           fi
-          if ! grep -qF "$tag" BUILDS.md; then
-            echo "::error title=Tag is not catalogued::BUILDS.md does not mention '$tag'. \
-          The row for this digest must name the tag being applied."
+          if ! bash scripts/catalog.sh tags | grep -qxF "$tag"; then
+            echo "::error title=Tag is not catalogued::No build row in BUILDS.md carries the \
+          tag '$tag'. The row for this digest must name the tag being applied."
             exit 1
           fi
 
@@ -144,13 +148,17 @@ jobs:
           re-pointed. If this is the residue of a failed retag, re-run with \
           correct_mispointed=true; that is refused unless $current is absent from BUILDS.md."
                 exit 1
-              elif grep -qF "$current" BUILDS.md; then
+              elif bash scripts/catalog.sh digests | grep -qxF "$current"; then
                 # The safety property that makes correction acceptable at all:
                 # a digest the catalog knows may be cited in a recorded
                 # measurement, so its tag is never taken away from it.
-                echo "::error title=Refusing to repoint a catalogued digest::$current appears \
-          in BUILDS.md, so it may be cited by a downstream measurement. correct_mispointed is \
-          only for tags left behind pointing at digests the catalog has never recorded."
+                #
+                # Build rows only. Grepping the whole file made this refuse to
+                # correct the -b1 tag because the paragraph explaining that the
+                # bad digest is bad happens to contain the bad digest.
+                echo "::error title=Refusing to repoint a catalogued digest::$current is a \
+          catalogued build in BUILDS.md, so it may be cited by a downstream measurement. \
+          correct_mispointed is only for tags left pointing at a digest that is not a build."
                 exit 1
               else
                 echo "$current is not in BUILDS.md; correcting the tag as requested"

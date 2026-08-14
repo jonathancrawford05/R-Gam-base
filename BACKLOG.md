@@ -5,7 +5,8 @@ was found, plus limitations that are accepted rather than fixed. One entry per
 item, each with the condition that would make it matter, so a future maintainer
 can decide whether it is worth doing rather than re-deriving the analysis.
 
-Nothing here affects the correctness of the publish path today. Everything that
+Nothing here affects the correctness of the publish path today. P2-1 did, once it
+blocked a retag, so it was promoted out of this list and fixed. Everything that
 did — one P0 and five P1s from the review of PR #3 — was fixed before merge and
 is listed under [Closed](#closed) for reference.
 
@@ -25,48 +26,11 @@ is listed under [Closed](#closed) for reference.
 
 | # | area | one line | trigger likelihood | cost if triggered | effort |
 |---|---|---|---|---|---|
-| [P2-1](#p2-1) | `publish.yml` | build number is grepped out of free-form Markdown | **medium** | high — wedges publishing | S |
 | [P2-2](#p2-2) | `oracle-manifest.R` | the build-identity guard can never fire | low | high — publishes an image stamped `unknown` | S |
 | [P2-4](#p2-4) | `retag.yml` / `publish.yml` | the two tag patterns disagree | very low | medium — retag refuses a real tag | XS |
 | [P2-5](#p2-5) | `Dockerfile` | label keys were renamed without a note | low | low — a filter silently matches nothing | XS |
 | [P2-6](#p2-6) | `README.md` | the retired `sha-<12>` tag is undocumented | low | low — a stale pin with no explanation | XS |
 | [P2-7](#p2-7) | `publish.yml` | a documentation-only push publishes a build | **high** | low — a redundant build, correctly catalogued | XS |
-
----
-
-### P2-1
-
-**Build numbers are derived by grepping free-form Markdown.**
-`.github/workflows/publish.yml:73-74`
-
-```bash
-last=$(grep -oE 'r[0-9.]+-cran[0-9-]+-b[0-9]+' BUILDS.md 2>/dev/null \
-       | sed 's/.*-b//' | sort -n | tail -1)
-```
-
-The pattern matches anywhere in the file, including the *what changed* prose.
-`BUILDS.md` explicitly encourages that prose — correction rows, deletion notes,
-"superseded by" references — so the format most likely to break this is the one
-the catalog asks for.
-
-**Trigger.** Any narrative sentence containing a tag-shaped string with a build
-number higher than the real maximum. A row reading "superseded by
-`r4.6.1-cran2026-08-01-b9`" jumps the counter from 3 to 10.
-
-**Cost.** Not a silent wrong answer — the counter only ever moves *forward*, so
-no tag is reused and the fail-closed guard is never fooled. The damage is that
-build numbers stop being a dense sequence and the catalog's own text can move
-them, which is a surprising coupling for whoever hits it.
-
-**Fix.** Restrict the match to the tag column, or at minimum to table rows:
-
-```bash
-last=$(grep -E '^\|' BUILDS.md | awk -F'|' '{print $3}' \
-       | grep -oE 'b[0-9]+$' | tr -d b | sort -n | tail -1)
-```
-
-**Acceptance.** Add a prose row naming a `-b99` tag to a copy of `BUILDS.md`;
-derivation must still return the real next number.
 
 ---
 
@@ -264,6 +228,7 @@ Fixed before PR #3 merged; listed so this file's scope is unambiguous.
 | — | `retag.yml` header contradicted its own catalog gate | `fdca7bc` |
 | — | `retag.yml` validated against the dispatched ref's catalog | `fdca7bc` |
 | P2-3 | `retag.yml` checked the source digest with a bare `docker manifest inspect`, no annotation | superseded — that step is gone; `point-tag-at-digest.sh` reports the HTTP status |
+| P2-1 | catalog checks grepped free-form Markdown instead of reading the table | promoted and fixed — it stopped being theoretical when it blocked the `-b1` correction; all catalog reads now go through `scripts/catalog.sh` |
 
 Full reasoning is in the review threads on
 [PR #3](https://github.com/jonathancrawford05/R-Gam-base/pull/3).

@@ -28,7 +28,7 @@ can be deleted — so the history lives here.
 | 1 | `r4.6.1-cran2026-08-01-b1` | `sha256:a77a61cf231933e17ec037ee0a63450067f66200a29ebc1cddbed14b8625ce8e` | 4.6.1 | 2026-08-01 | 1.9.4 | — | 2026-08-09T21:23:56Z | `0c6b56c31a88d911b1fc2732d779a9084268e597` | First published build. R 4.6.1 pinned by base digest `sha256:555a0e77…`, CRAN pinned to the 2026-08-01 P3M snapshot, mgcv/jsonlite/digest/sessioninfo installed from it. This is the digest polaris-re pinned as its conformance oracle and against which `tr(F)` was verified to 7.2e-13. Originally also carried `latest` and `r4.6.1-2026-08-01`; both were later moved to build 2. |
 | 2 | `r4.6.1-cran2026-08-01-b2` | `sha256:8853bf2b600f6ce0fcae8e29d0a78e4b95ed3603dacb4f5cafa49e7c29606b7c` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-11T00:15:02Z | `95182b33cc7bcf13be99e061c034c8fb7c74971e` | Added `mboost` 2.9.13 and its tree (stabs 0.7.1, nnls 1.6, quadprog 1.5.8, partykit 1.2.29, survival 3.8.6) for `gamboost` GA2M work. **mgcv unchanged at 1.9.4**; R, the CRAN snapshot, Matrix 1.7.5, nlme 3.1.169, jsonlite 2.0.0 and digest 0.6.39 all unchanged, asserted at build time. **The `r4.6.1-2026-08-01` tag was moved from build 1 onto this build** — the name stayed truthful but stopped identifying a single artifact, which is what prompted the immutable-tag policy; that tag is deprecated and must not be used as a pin. |
 | 3 | `r4.6.1-cran2026-08-01-b3` | `sha256:9ea27ff8103aff292ec775e85a1d7ca810f7ea43dcde49d40ab210c13c591aaa` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T12:28:08Z | `c9cb8939255d3f13ec61fa7278c6ce471805104d` | First build produced under the immutable-tag policy (PR #3). **No version changed** -- R, the CRAN snapshot, mgcv 1.9.4 and mboost 2.9.13 are all identical to build 2, asserted at build time. What is new is identity: OCI labels (`org.opencontainers.image.version`/`.created`/`.revision`, `io.polaris.*`) and `/opt/oracle-manifest.json`, so this is the first image that can name itself. The bytes differ from build 2 only by those labels and that file. |
-| 4 | `r4.6.1-cran2026-08-01-b4` | `sha256:e295b0e23bc4eb8dab806b1e46830dde477e44259b54dcea3a9135538a9ed61c` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T12:56:48Z | `e198f20c1771458cd22160b46d699b9ee2fb7c1e` | _(pending: describe this build)_ |
+| 4 | `r4.6.1-cran2026-08-01-b4` | `sha256:e295b0e23bc4eb8dab806b1e46830dde477e44259b54dcea3a9135538a9ed61c` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T12:56:48Z | `e198f20c1771458cd22160b46d699b9ee2fb7c1e` | **No version changed** -- identical R, CRAN snapshot, mgcv 1.9.4 and mboost 2.9.13 to build 3, asserted at build time. Published by the merge of PR #4, which changed only workflows, scripts and documentation; the image differs from build 3 only in the labels that record its own tag, timestamp and repo SHA. First row inserted into the table rather than appended past the end of the file. |
 <!-- new build rows are inserted directly above this line -->
 
 ## Notes on the backfilled rows
@@ -95,5 +95,24 @@ The fix replaces `imagetools create` with a re-PUT of the manifest's exact bytes
 a manifest's digest *is* the hash of its bytes. Correcting the `-b1` tag then
 requires re-pointing a tag, which this repository otherwise forbids — permitted
 here by a rule narrow enough to keep the guarantee intact: a tag may be
-re-pointed only when the digest it currently names appears **nowhere in this
-catalog**, which is what proves no measurement can cite it.
+re-pointed only when the digest it currently names **is not a build row in the
+table above**, which is what proves no measurement can cite it.
+
+### The second attempt failed too, on this document
+
+Run [31802521297](https://github.com/jonathancrawford05/R-Gam-base/actions/runs/31802521297)
+refused to correct the tag, reporting that `1971e750` "appears in BUILDS.md, so
+it may be cited by a downstream measurement". It does appear — in the paragraph
+above, which exists to say the opposite.
+
+The guard asked `grep -qF "$digest" BUILDS.md`, so it answered "is this digest
+*mentioned*" when the question was "is this digest a *build*". Both directions
+of that mistake are wrong, and the lenient one is worse: the same file's
+"the digest must be catalogued" gate would have accepted a digest that only ever
+appeared in prose.
+
+`scripts/catalog.sh` now reads the table as data — a row counts only when its
+first cell is a build number — and every catalog check in both workflows goes
+through it, including `publish.yml`'s build-number derivation, which had the
+same flaw and was already recorded as P2-1 in the backlog. The guard behaved
+correctly given what it was asked; it was asked the wrong question.
