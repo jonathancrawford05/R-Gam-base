@@ -70,9 +70,13 @@ jobs:
           # cannot: two builds with the same R and the same snapshot are still two
           # builds. BUILDS.md is the source of truth rather than the registry, so
           # the catalog can never fall behind the tag it describes.
-          last=$(grep -oE 'r[0-9.]+-cran[0-9-]+-b[0-9]+' BUILDS.md 2>/dev/null \
-                 | sed 's/.*-b//' | sort -n | tail -1)
-          build_number=$(( ${last:-0} + 1 ))
+          # Read the table as data. The previous version grepped the whole file
+          # for anything tag-shaped, so a sentence in the *what changed* column
+          # naming a tag -- which the catalog explicitly invites -- could move
+          # the counter. catalog.sh only sees rows whose first cell is a build
+          # number.
+          last=$(bash scripts/catalog.sh max-build)
+          build_number=$(( last + 1 ))
           tag="r${r_version}-cran${snapshot}-b${build_number}"
           created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
