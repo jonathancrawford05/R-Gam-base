@@ -5,10 +5,16 @@ on:
     # Feature branches build and selftest but never publish; see the PUBLISH
     # gate below.
     branches: [main, "claude/**"]
-    # The publish job appends to BUILDS.md and pushes it to main. Without this
-    # the catalog commit would retrigger the workflow, which would publish a new
-    # build, which would append another row -- forever.
-    paths-ignore: ["BUILDS.md"]
+    # The publish job commits the generated catalog back to main. Without this
+    # that commit retriggers the workflow, which publishes, which commits --
+    # forever. Documentation is excluded for the same reason it cannot change
+    # the image: none of it is a Docker build input.
+    #
+    # Never add Dockerfile, oracle/** or the R scripts the Dockerfile COPYs.
+    paths-ignore:
+      - "**/*.md"
+      - "catalog/**"
+      - "LICENSE"
   pull_request:
   # Monthly rebuild. It moves nothing: the base is digest-pinned and CRAN is
   # snapshot-pinned, so this cannot pull in base-OS patches either. What it
@@ -20,14 +26,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # the publish job appends the BUILDS.md row
+  contents: write   # the publish job commits the generated catalog
   packages: write
 
 concurrency:
   group: publish-${{ github.ref }}
   # Never cancel a run that might be publishing. Pushing the image tag and
-  # appending the BUILDS.md row are two steps with no transaction around them: a
-  # cancel landing between them leaves a tag in the registry with no catalog row,
+  # recording the build are two steps with no transaction around them: a
+  # cancel landing between them leaves a tag in the registry with no catalog record,
   # which silently consumes a build number and wedges the next publish until
   # someone hand-edits the file. Branch and PR runs publish nothing, so they stay
   # cancellable and keep saving the CI minutes this setting was added for.
@@ -41,7 +47,7 @@ jobs:
     # prove the image is sound without moving a tag.
     #
     # The ref condition is not decoration. This job pushes image tags and commits
-    # BUILDS.md back with `git push origin HEAD:main`. A workflow_dispatch from a
+    # the catalog back with `git push origin HEAD:main`. A workflow_dispatch from a
     # feature branch would put HEAD on that branch, and the rebase-and-push would
     # carry every commit on it onto main -- merging unreviewed work with no PR,
     # or, if main is protected, failing AFTER the image tag was already pushed and
@@ -68,14 +74,9 @@ jobs:
 
           # The build number is what makes a tag unique when the version fields
           # cannot: two builds with the same R and the same snapshot are still two
-          # builds. BUILDS.md is the source of truth rather than the registry, so
-          # the catalog can never fall behind the tag it describes.
-          # Read the table as data. The previous version grepped the whole file
-          # for anything tag-shaped, so a sentence in the *what changed* column
-          # naming a tag -- which the catalog explicitly invites -- could move
-          # the counter. catalog.sh only sees rows whose first cell is a build
-          # number.
-          last=$(bash scripts/catalog.sh max-build)
+          # builds. catalog/builds/*.json is the source of truth rather than the
+          # registry, so the catalog can never fall behind the tag it describes.
+          last=$(python3 scripts/catalog.py max-build)
           build_number=$(( last + 1 ))
           tag="r${r_version}-cran${snapshot}-b${build_number}"
           created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -126,8 +127,8 @@ jobs:
           case "$rc" in
             0)  echo "tag is free; proceeding" ;;
             10) echo "::error title=Tag already exists::${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }} \
-          is already published. Tags are immutable and are never re-pointed. Append the missing \
-          row to BUILDS.md so the build number advances, then re-run."
+          is already published. Tags are immutable and are never re-pointed. Add the missing \
+          record under catalog/builds/ so the build number advances, then re-run."
                 exit 1 ;;
             *)  echo "::error title=Cannot verify tag state::The registry did not give a definite \
           answer for ${{ steps.meta.outputs.tag }}. Refusing to publish: treating an unreachable \
@@ -166,6 +167,22 @@ jobs:
           docker run --rm -v "${{ github.workspace }}/out:/work/out" \
             oracle-local:candidate Rscript /opt/oracle/run.R --out /work/out
           ls -la out
+
+      # The oracle's whole promise: identical pinned inputs produce identical
+      # numbers across rebuilds. selftest.R checks that two runs inside ONE image
+      # agree; only this compares one build against the last. Six builds existed
+      # before this gate did and no two had ever been compared.
+      - name: Reference outputs must match the previous build
+        id: repro
+        run: |
+          set -euo pipefail
+          python3 scripts/check-output-hashes.py out/index.json catalog/expected-hashes.json \
+            | tee /tmp/repro.log
+          if grep -q '^BASELINE_WRITTEN=1$' /tmp/repro.log; then
+            echo "baseline=written" >> "$GITHUB_OUTPUT"
+          else
+            echo "baseline=matched" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -211,44 +228,40 @@ jobs:
           print(f"mboost={p.get('mboost','-')}")
           PY
 
-      # The catalog is the artifact a consumer actually reads; appending here is
-      # what stops it falling behind the registry.
-      - name: Append the BUILDS.md row
+      # The catalog is generated, never authored. CI writes the record out of
+      # the image it just published, so every value in it was read from the
+      # installed library rather than asserted by hand.
+      - name: Record the build
         # Stated again rather than inherited: this is the step that writes to
         # main, and it should be readable as safe without tracing PUBLISH.
         if: env.PUBLISH == 'true' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          row="| ${{ steps.meta.outputs.build_number }} \
-          | \`${{ steps.meta.outputs.tag }}\` \
-          | \`${{ steps.push.outputs.digest }}\` \
-          | ${{ steps.meta.outputs.r_version }} \
-          | ${{ steps.meta.outputs.snapshot }} \
-          | ${{ steps.versions.outputs.mgcv }} \
-          | ${{ steps.versions.outputs.mboost }} \
-          | ${{ steps.meta.outputs.created }} \
-          | \`${{ github.sha }}\` \
-          | _(pending: describe this build)_ |"
-          # Insert into the table, not at the end of the file. `>> BUILDS.md`
-          # put build 3's row below the notes section, where it rendered as a
-          # stray one-row table -- the data was right and the document was
-          # wrong, which is a poor property for the artifact consumers read.
-          # The marker makes the insertion point explicit and reviewable rather
-          # than inferred from "the last line that looks like a row".
-          marker='<!-- new build rows are inserted directly above this line -->'
-          if ! grep -qF "$marker" BUILDS.md; then
-            echo "::error title=Catalog marker missing::BUILDS.md has no insertion marker, \
-          so this row has nowhere well-defined to go. Restore the marker line at the end of \
-          the Builds table."
-            exit 1
-          fi
-          printf '%s\n' "$(echo "$row" | tr -s ' ')" > /tmp/row.md
-          awk -v marker="$marker" 'index($0, marker) { while ((getline line < "/tmp/row.md") > 0) print line } { print }' \
-            BUILDS.md > /tmp/BUILDS.md && mv /tmp/BUILDS.md BUILDS.md
+          python3 - <<'PY'
+          import json, os
+          m = json.load(open("/tmp/m.json"))
+          rec = {
+              "build": int("${{ steps.meta.outputs.build_number }}"),
+              "tag": "${{ steps.meta.outputs.tag }}",
+              "digest": "${{ steps.push.outputs.digest }}",
+              "r_version": m.get("r_version"),
+              "cran_snapshot": m.get("cran_snapshot"),
+              "base_image_digest": m.get("base_image_digest"),
+              "built_at": "${{ steps.meta.outputs.created }}",
+              "revision": "${{ github.sha }}",
+              "workflow_run": int("${{ github.run_id }}"),
+              "packages": m.get("packages", {}),
+              "packages_absent": m.get("packages_absent"),
+              "source": "published",
+          }
+          json.dump(rec, open("/tmp/record.json", "w"), indent=2, sort_keys=True)
+          PY
+          python3 scripts/catalog.py add /tmp/record.json
+          python3 scripts/catalog.py render > BUILDS.md
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add BUILDS.md
+          git add catalog BUILDS.md
           git commit -m "catalog: build ${{ steps.meta.outputs.build_number }} (${{ steps.meta.outputs.tag }}) [skip ci]"
           # Rebase rather than force: a concurrent commit to main must not be lost.
           git pull --rebase --autostash origin main
@@ -277,6 +290,6 @@ jobs:
             echo "    container: $image@$digest"
             echo '```'
             echo
-            echo "A row has been appended to BUILDS.md. Please replace its"
-            echo "_(pending)_ note with a sentence saying what actually changed."
+            echo "Recorded in \`catalog/builds/${{ steps.meta.outputs.tag }}.json\`;"
+            echo "BUILDS.md has been regenerated from it."
           } >> "$GITHUB_STEP_SUMMARY"

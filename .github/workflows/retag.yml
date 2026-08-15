@@ -15,10 +15,9 @@
 #
 # It also prints the image's recorded versions, so a build published before the
 # manifest/label policy existed can be CONFIRMED by inspection. Note the ordering:
-# the catalog row must already exist before this will run (see the gate below), so
-# inspection here verifies a row that was written from the publishing run's logs
-# or from `docker run <ref> cat /opt/oracle/manifest.json` locally. Catalog first,
-# then tag, then confirm.
+# the catalog record must already exist before this will run (see the gate below),
+# so inspection here verifies a record written from the publishing run or
+# reconstructed by hand. Catalog first, then tag, then confirm.
 #
 # Usage: Actions -> "retag" -> Run workflow, supply the digest and the new tag.
 # =============================================================================
@@ -54,8 +53,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Pinned to main, not the dispatched ref. The gate below validates against
-      # BUILDS.md, and a dispatch from a stale branch would otherwise check
-      # against a stale catalog -- passing a digest that main has never heard of.
+      # the catalog, and a dispatch from a stale branch would otherwise check
+      # against a stale one -- passing a digest that main has never heard of.
       # It also means the guards run main's reviewed copies of the scripts.
       - uses: actions/checkout@v4
         with:
@@ -83,7 +82,7 @@ jobs:
           fi
           # The catalog must already know this digest.
           #
-          # publish.yml derives the next build number by grepping BUILDS.md, so a
+          # publish.yml derives the next build number from the catalog, so a
           # tag minted here and never recorded silently consumes a number: the
           # catalog still tops out at the old value, a later publish derives a
           # number this workflow already used, and the tag guard then blocks
@@ -92,18 +91,18 @@ jobs:
           # row first keeps the invariant and keeps this workflow free of write
           # access to the repository.
           #
-          # Read the TABLE, not the file. BUILDS.md's prose discusses digests and
-          # tags -- including ones that must never be used -- so a plain grep
-          # answers "is this mentioned", which is a different question.
-          if ! bash scripts/catalog.sh digests | grep -qxF "$digest"; then
-            echo "::error title=Digest is not catalogued::$digest is not in a build row of \
-          BUILDS.md. Append its row first -- the catalog is the source of truth for build \
-          numbers, and a tag it does not know about will wedge a later publish."
+          # catalog.py reads catalog/builds/*.json. The catalog used to be
+          # hand-written Markdown and these gates grepped it, which answered
+          # "is this mentioned" rather than "is this a build".
+          if ! python3 scripts/catalog.py digests | grep -qxF "$digest"; then
+            echo "::error title=Digest is not catalogued::$digest has no record under \
+          catalog/builds/. Add its record first -- the catalog is the source of truth for \
+          build numbers, and a tag it does not know about will wedge a later publish."
             exit 1
           fi
-          if ! bash scripts/catalog.sh tags | grep -qxF "$tag"; then
-            echo "::error title=Tag is not catalogued::No build row in BUILDS.md carries the \
-          tag '$tag'. The row for this digest must name the tag being applied."
+          if ! python3 scripts/catalog.py tags | grep -qxF "$tag"; then
+            echo "::error title=Tag is not catalogued::No build record carries the tag \
+          '$tag'. The record for this digest must name the tag being applied."
             exit 1
           fi
 
@@ -146,22 +145,22 @@ jobs:
                 echo "::error title=Tag already exists::${{ steps.meta.outputs.target }} \
           resolves to $current, not ${{ inputs.digest }}. Tags are immutable and are never \
           re-pointed. If this is the residue of a failed retag, re-run with \
-          correct_mispointed=true; that is refused unless $current is absent from BUILDS.md."
+          correct_mispointed=true; that is refused unless $current is not a recorded build."
                 exit 1
-              elif bash scripts/catalog.sh digests | grep -qxF "$current"; then
+              elif python3 scripts/catalog.py digests | grep -qxF "$current"; then
                 # The safety property that makes correction acceptable at all:
                 # a digest the catalog knows may be cited in a recorded
                 # measurement, so its tag is never taken away from it.
                 #
-                # Build rows only. Grepping the whole file made this refuse to
-                # correct the -b1 tag because the paragraph explaining that the
-                # bad digest is bad happens to contain the bad digest.
+                # Records only. When the catalog was Markdown this grepped the
+                # whole file and refused to correct the -b1 tag, because the
+                # paragraph explaining the bad digest contained the bad digest.
                 echo "::error title=Refusing to repoint a catalogued digest::$current is a \
-          catalogued build in BUILDS.md, so it may be cited by a downstream measurement. \
+          recorded build, so it may be cited by a downstream measurement. \
           correct_mispointed is only for tags left pointing at a digest that is not a build."
                 exit 1
               else
-                echo "$current is not in BUILDS.md; correcting the tag as requested"
+                echo "$current is not a recorded build; correcting the tag as requested"
                 echo "action=correct" >> "$GITHUB_OUTPUT"
               fi
               ;;
@@ -249,7 +248,7 @@ jobs:
               echo
               echo "This image carries neither \`/opt/oracle-manifest.json\` nor"
               echo "\`/opt/oracle/manifest.json\`. It predates both. Record its versions in"
-              echo "BUILDS.md from the workflow run that published it, and say so in the row."
+              echo "its catalog record from the workflow run that published it."
             fi
             echo
             echo "### Packages not covered by the older manifest"

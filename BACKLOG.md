@@ -29,7 +29,7 @@ is listed under [Closed](#closed) for reference.
 | [P2-2](#p2-2) | `oracle-manifest.R` | the build-identity guard can never fire | low | high — publishes an image stamped `unknown` | S |
 | [P2-4](#p2-4) | `retag.yml` / `publish.yml` | the two tag patterns disagree | very low | medium — retag refuses a real tag | XS |
 | [P2-5](#p2-5) | `Dockerfile` | label keys were renamed without a note | low | low — a filter silently matches nothing | XS |
-| [P2-7](#p2-7) | `publish.yml` | any push that cannot change the image still publishes a build | **high** | low — a redundant build, correctly catalogued | S |
+| [P2-7](#p2-7) | `publish.yml` | workflow and script pushes still publish a build (docs no longer do) | medium | low — a redundant build, correctly catalogued | XS |
 
 ---
 
@@ -136,7 +136,7 @@ redundant, but only build 6 came from a docs-only merge:
 | build | published by | non-`.md` files changed |
 | --- | --- | --- |
 | 4 | merge of #4 | `publish.yml`, `retag.yml`, `point-tag-at-digest.sh`, `resolve-tag-digest.sh` |
-| 5 | merge of #5 | `publish.yml`, `retag.yml`, `catalog.sh` |
+| 5 | merge of #5 | `publish.yml`, `retag.yml`, `catalog.sh` (now `catalog.py`) |
 | 6 | merge of #7 | *(none — docs only)* |
 
 Nothing in `.github/` is a Docker build input, and neither are the CI-only shell
@@ -156,14 +156,19 @@ quietly weakens the catalog's usefulness as a narrative.
 
 ```yaml
 paths-ignore:
-  - "**/*.md"
-  - "LICENSE"
-  - ".github/**"
-  - "scripts/catalog.sh"
-  - "scripts/check-tag-free.sh"
-  - "scripts/resolve-tag-digest.sh"
-  - "scripts/point-tag-at-digest.sh"
+  - "**/*.md"          # done
+  - "catalog/**"       # done
+  - "LICENSE"          # done
+  - ".github/**"       # still outstanding
+  - "scripts/*.sh"     # still outstanding (none are build inputs)
+  - "scripts/catalog.py"
+  - "scripts/check-output-hashes.py"
 ```
+
+**Partially done.** `**/*.md`, `catalog/**` and `LICENSE` are now ignored, which
+covers the documentation and generated-catalog cases — including the catalog
+commit the publish job makes itself. What remains is `.github/**` and the
+CI-only scripts, which is what produced builds 4 and 5.
 
 **The build inputs, which must never appear in that list**, are exactly the
 Dockerfile and what it `COPY`s:
@@ -247,7 +252,7 @@ Fixed before PR #3 merged; listed so this file's scope is unambiguous.
 | — | `retag.yml` validated against the dispatched ref's catalog | `fdca7bc` |
 | P2-3 | `retag.yml` checked the source digest with a bare `docker manifest inspect`, no annotation | superseded — that step is gone; `point-tag-at-digest.sh` reports the HTTP status |
 | P2-6 | the retired `sha-<12>` tags were undocumented | fixed — two rows in README's tag table plus a callout, closing review P2-2 on PR #6 |
-| P2-1 | catalog checks grepped free-form Markdown instead of reading the table | promoted and fixed — it stopped being theoretical when it blocked the `-b1` correction; all catalog reads now go through `scripts/catalog.sh` |
+| P2-1 | catalog checks grepped free-form Markdown instead of reading the table | promoted and fixed — it stopped being theoretical when it blocked the `-b1` correction; the catalog is now JSON (`catalog/builds/*.json`) read by `scripts/catalog.py`, and BUILDS.md is generated output |
 
 Full reasoning is in the review threads on
 [PR #3](https://github.com/jonathancrawford05/R-Gam-base/pull/3).
