@@ -24,6 +24,7 @@ commentary and is not machine-checked.
 | 5 | `r4.6.1-cran2026-08-01-b5` | `sha256:f77fd7ae6bfc86154e846632b0dad4e552ecf488d2db86b90074c9f8305c6037` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T13:06:31Z | backfilled |
 | 6 | `r4.6.1-cran2026-08-01-b6` | `sha256:779c286a13531d3d89e9742b282348dea1f6ce940c66a75d0f78ae41461550be` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T18:45:38Z | backfilled |
 | 7 | `r4.6.1-cran2026-08-01-b7` | `sha256:774803b941bb435e4826fcac12dfbc131e94da19428d6c22a825c0edf15be3c8` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-15T00:32:04Z | published |
+| 8 | `r4.6.1-cran2026-08-01-b8` | `sha256:0d54c192e23c62bdc614eb5b534e04482f6cf92290e76cacb7956022cd806fd8` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-15T14:45:59Z | published |
 
 `source` is `published` when CI wrote the record from the image at publish
 time, and `backfilled` when it was reconstructed afterwards from that build's
