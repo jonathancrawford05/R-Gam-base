@@ -65,12 +65,19 @@ pin, and **must not appear in any recorded measurement, CI pin, or report**.
 > The scheme was dropped after build 2. Those two happen to be unambiguous only
 > because no rebuild has yet reused their SHA, which is luck, not a property.
 
-### What produced this?
+### What is in the image?
+
+One command, and it needs nothing from this repository:
 
 ```bash
 docker run --rm ghcr.io/jonathancrawford05/r-gam-base@sha256:<digest> \
   cat /opt/oracle-manifest.json
 ```
+
+To read the current build's versions without pulling the image,
+[`catalog/latest.json`](catalog/latest.json) is the same content, written by CI
+out of the image it just published. [`catalog/builds/`](catalog/builds) has one
+such record per build and is what [`BUILDS.md`](BUILDS.md) is generated from.
 
 Every version in it is read from the installed library at build time, not from a
 spec file — it records what *is* in the image, not what was requested. `docker
@@ -80,9 +87,15 @@ timestamp and the git SHA of this repo.
 
 ## Every build is catalogued
 
-[`BUILDS.md`](BUILDS.md) is append-only, one row per published build, keyed by
-full digest. When a new build is published, the handoff to a consumer is **the
-digest plus its catalog row** — a tag name alone is not sufficient.
+Each published build gets a JSON record in [`catalog/builds/`](catalog/builds),
+written by CI **from the image it just published** — every version in it was read
+from the installed library, not copied from a spec. [`BUILDS.md`](BUILDS.md) is
+rendered from those records and is not edited by hand.
+
+The handoff to a consumer is **the digest plus its record** — a tag name alone is
+not sufficient. Narrative about how builds came about lives in
+[`HISTORY.md`](HISTORY.md), which is explicitly commentary and is not
+machine-checked.
 
 **A change to `mgcv` is treated as material** and called out prominently, because
 downstream numerical references may need re-measuring. A quiet `mgcv` bump inside
@@ -267,10 +280,20 @@ that the pinned snapshot is still resolvable and the image still builds, which
 is early warning that a pin has rotted. Picking up OS patches means bumping
 `BASE_DIGEST`, which is a deliberate commit.
 
-Because of that, a rebuild must produce byte-identical reference outputs. The
-image build time is deliberately kept out of each output and recorded in
-`index.json` instead; the selftest asserts an output's hash does not change when
-only the build time does.
+Because of that, a rebuild must produce byte-identical reference outputs — and
+this is now **checked, not asserted**. Every publish compares its outputs against
+`catalog/expected-hashes.json`, the hashes the previous build produced, and fails
+on any difference. `scripts/check-output-hashes.py` is the gate.
+
+Two weaker checks sit underneath it, both inside a single image: the selftest
+runs each case twice and requires the outputs to be byte-identical, and it
+verifies an output's hash does not move when only the recorded build time does
+(the build time is kept out of each output and recorded in `index.json`).
+Those test the mechanism; the cross-build gate tests the claim.
+
+A deliberate change to a case will fail the gate, which is the point. Delete the
+affected entry from `catalog/expected-hashes.json` in the same commit that
+changes the case, so the new hash arrives as a reviewable diff.
 
 ## Bumping versions
 

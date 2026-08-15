@@ -1,0 +1,30 @@
+{
+  "backfill_note": "Reconstructed from the publishing workflow run and the previous hand-written catalog. Digest and tag verified against the registry on 2026-08-14.",
+  "base_image_digest": "sha256:555a0e7734b17f3901f01c8e379f87d797a0e6344a4cc3b246329ed3f0689809",
+  "build": 2,
+  "built_at": "2026-08-11T00:15:02Z",
+  "cran_snapshot": "2026-08-01",
+  "digest": "sha256:8853bf2b600f6ce0fcae8e29d0a78e4b95ed3603dacb4f5cafa49e7c29606b7c",
+  "packages": {
+    "Matrix": "1.7.5",
+    "digest": "0.6.39",
+    "jsonlite": "2.0.0",
+    "mboost": "2.9.13",
+    "mgcv": "1.9.4",
+    "nlme": "3.1.169",
+    "nnls": "1.6",
+    "partykit": "1.2.29",
+    "quadprog": "1.5.8",
+    "sessioninfo": "1.2.4",
+    "stabs": "0.7.1",
+    "survival": "3.8.6"
+  },
+  "packages_not_recorded": [
+    "MASS"
+  ],
+  "r_version": "4.6.1",
+  "revision": "95182b33cc7bcf13be99e061c034c8fb7c74971e",
+  "source": "backfilled",
+  "tag": "r4.6.1-cran2026-08-01-b2",
+  "workflow_run": 31445230665
+}
