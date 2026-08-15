@@ -85,15 +85,11 @@ unchanged `main` and would have pushed the same name onto a different digest.
 
 Neither can be deleted, for the same reason as `1971e750` above.
 
-## The oracle's numbers depend on the machine (open)
+## The oracle's numbers depended on the machine
 
-The reproducibility gate failed on its first real comparison and is still
-failing intermittently. Recorded here while it is open, because the wrong
-answers along the way are instructive.
-
-Build 7 recorded output hashes `da0bafdf`/`0e3964c7`. Later builds produce
+Build 7 recorded output hashes `da0bafdf`/`0e3964c7`. Later builds produced
 either those or `3ab5ad90`/`4a89f1e3` — **exactly two values, never a third,
-roughly half the runs each** — while every version check passes: mgcv 1.9.4,
+roughly half the runs each** — while every version check passed: mgcv 1.9.4,
 Matrix 1.7.5, nlme 3.1.169, `assert-pinned-versions.R` green, the selftest
 green, the two image manifests differing only in `built_at`.
 
@@ -108,27 +104,42 @@ green, the two image manifests differing only in `built_at`.
 | push | `756a491` | no | **fail** |
 | pull_request | `756a491` | no | pass |
 
-Two wrong causes were proposed and both were stated with more confidence than
-the evidence carried:
+### Two wrong causes, both stated too confidently
 
 1. **BLAS/CPU floating point** — proposed first, then discarded because one
-   diagnostic run reproduced build 7's hashes from a fresh build. One
-   observation of an intermittent phenomenon proves nothing; that run landed on
-   one side of a coin flip.
-2. **The GHA layer cache** — concluded from that same run and stated publicly
-   on PR #10. The table above refutes it outright: a cached build passed and a
-   cache-free build failed.
+   diagnostic run reproduced build 7's hashes from a fresh build.
+2. **The GHA layer cache** — concluded from that same run and written into the
+   README, a workflow comment and a PR comment. The table refutes it outright:
+   a cached build passed and a cache-free build failed.
 
-The lesson, which cost most of a day: **when the phenomenon is intermittent, a
-single observation cannot establish a cause.** Both errors were the same error.
+Both were the same mistake: **treating a single observation of an intermittent
+phenomenon as proof of a mechanism.** It cost most of a day and two retractions.
 
-What the data does support is that the cause is *discrete*. Two stable values
-rather than a spread is the signature of two thread counts, since OpenBLAS
-sizes its pool from the visible core count and a threaded reduction sums in a
-different order than a serial one. `OPENBLAS_NUM_THREADS=1` is now set in the
-image, and the mechanism is tested by varying `--cpuset-cpus` within a single
-job rather than by re-running CI and hoping the runners differ.
+### The fix
 
-`cache-from`/`cache-to` remain removed from the build. That is defensible on its
-own for an image claiming reproducibility, but it is **not** the fix and was
-never shown to be.
+Two stable values rather than a spread is the signature of two thread counts.
+OpenBLAS sizes its pool from the visible core count, and a threaded reduction
+sums in a different order than a serial one — correct either way, differing in
+the last bits, which for an oracle is the entire artifact.
+
+`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1` are set as
+`ENV` in the image. Measured with `--cpuset-cpus` varied inside a single job
+(run 31889520068), the pinned image produced identical outputs at 1, 2 and 4
+cores, and produced a **third** value distinct from both earlier ones —
+`6fc8c248`/`e3ffe80d` — which is what a serial reduction should give if thread
+count was the variable.
+
+**Evidence, stated precisely:** the pin makes the output independent of core
+affinity *on one host*, and the new value is consistent with the thread
+hypothesis. That is support, not proof. The proof is cross-host, and it arrives
+for free: ordinary CI runs land on varied runners, so a run of green gate
+results across successive builds is the confirmation. If the gate fails again,
+the hypothesis is wrong and the two-valued pattern needs re-examining — do not
+update the baseline to make it pass.
+
+### Consequence for consumers
+
+The reference values changed once, deliberately, at this commit. Digests already
+pinned are unaffected — build 7 and earlier are exactly as published — but a
+consumer adopting a build from here on is comparing against different numbers
+and must re-measure at that point.
