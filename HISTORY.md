@@ -85,41 +85,50 @@ unchanged `main` and would have pushed the same name onto a different digest.
 
 Neither can be deleted, for the same reason as `1971e750` above.
 
-## The layer cache produced different numbers under an identical manifest
+## The oracle's numbers depend on the machine (open)
 
-The worst finding here, and the one the reproducibility gate was built without
-knowing it would catch.
+The reproducibility gate failed on its first real comparison and is still
+failing intermittently. Recorded here while it is open, because the wrong
+answers along the way are instructive.
 
-Build 8 failed the gate on its first real comparison: build 7 recorded output
-hashes `da0bafdf`/`0e3964c7`, and every build after it produced
-`3ab5ad90`/`4a89f1e3` — reproducibly. Meanwhile every version check passed.
-mgcv 1.9.4, Matrix 1.7.5, nlme 3.1.169, `assert-pinned-versions.R` green, the
-selftest green, the two manifests differing only in `built_at`.
+Build 7 recorded output hashes `da0bafdf`/`0e3964c7`. Later builds produce
+either those or `3ab5ad90`/`4a89f1e3` — **exactly two values, never a third,
+roughly half the runs each** — while every version check passes: mgcv 1.9.4,
+Matrix 1.7.5, nlme 3.1.169, `assert-pinned-versions.R` green, the selftest
+green, the two image manifests differing only in `built_at`.
 
-Three builds in one job settled it:
+| run | commit | layer cache | result |
+| --- | --- | --- | --- |
+| push | `fb25715` | yes | fail |
+| push, re-run | `fb25715` | yes | fail |
+| push | `ce9005b4` | yes | **pass** |
+| pull_request | `ce9005b4` | yes | pass |
+| push | `e091a73` | no | pass |
+| pull_request | `e091a73` | no | pass |
+| push | `756a491` | no | **fail** |
+| pull_request | `756a491` | no | pass |
 
-| build | outputs |
-| --- | --- |
-| build 7's published image, pulled by digest, run twice | `da0bafdf` / `0e3964c7` |
-| the same source, built fresh with **no cache** | `da0bafdf` / `0e3964c7`, identical field for field |
-| the same source via `publish.yml`, with `cache-from: type=gha` | `3ab5ad90` / `4a89f1e3` |
+Two wrong causes were proposed and both were stated with more confidence than
+the evidence carried:
 
-The source was innocent, the runner was innocent, and the baseline was faithful.
-**The variable was the GitHub Actions layer cache**, which served a layer that
-computed different numbers while nothing observable about the environment
-changed.
+1. **BLAS/CPU floating point** — proposed first, then discarded because one
+   diagnostic run reproduced build 7's hashes from a fresh build. One
+   observation of an intermittent phenomenon proves nothing; that run landed on
+   one side of a coin flip.
+2. **The GHA layer cache** — concluded from that same run and stated publicly
+   on PR #10. The table above refutes it outright: a cached build passed and a
+   cache-free build failed.
 
-That is the exact drift this image exists to prevent, and it was invisible to
-every check that existed before the output-hash gate — because version pinning
-answers "is the same software installed", not "does it compute the same thing".
+The lesson, which cost most of a day: **when the phenomenon is intermittent, a
+single observation cannot establish a cause.** Both errors were the same error.
 
-`cache-from`/`cache-to` were removed from the image build. Not a workaround: for
-an image whose whole claim is that its answers do not move, a mutable cache in
-the path that determines those answers cannot be traded for build time. The
-build is about 50 seconds.
+What the data does support is that the cause is *discrete*. Two stable values
+rather than a spread is the signature of two thread counts, since OpenBLAS
+sizes its pool from the visible core count and a threaded reduction sums in a
+different order than a serial one. `OPENBLAS_NUM_THREADS=1` is now set in the
+image, and the mechanism is tested by varying `--cpuset-cpus` within a single
+job rather than by re-running CI and hoping the runners differ.
 
-Two wrong turns on the way, recorded because both were confidently stated:
-BLAS/CPU floating-point variation was proposed as the cause and was wrong, and
-"a re-run produced the same hashes, therefore it is deterministic" was too
-strong — a re-run rules out run-to-run races, not machine-to-machine variation.
-Only running build 7's own image on the same host settled it.
+`cache-from`/`cache-to` remain removed from the build. That is defensible on its
+own for an image claiming reproducibility, but it is **not** the fix and was
+never shown to be.

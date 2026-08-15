@@ -146,20 +146,13 @@ jobs:
           context: .
           load: true
           tags: oracle-local:candidate
-          # NO LAYER CACHE. This is deliberate and it is load-bearing.
+          # No layer cache. A mutable cache sitting in the path that determines
+          # this image's numbers is not worth a minute of build time when the
+          # image's whole claim is that those numbers do not move.
           #
-          # With `cache-from: type=gha` this build produced reference outputs
-          # that differed from build 7's, reproducibly, while every version
-          # string in the manifest stayed identical -- mgcv 1.9.4, Matrix 1.7.5,
-          # nlme 3.1.169, the lot. Built from the same source WITHOUT the cache,
-          # it reproduces build 7 exactly, field for field.
-          #
-          # So the cache can serve a layer that computes different numbers under
-          # an unchanged version manifest. assert-pinned-versions.R cannot catch
-          # that, because nothing it checks has moved. For an image whose entire
-          # purpose is that its answers do not move, a mutable cache in the path
-          # that determines those answers is not a saving worth having: the build
-          # is about a minute.
+          # This was briefly and wrongly reported as the fix for the
+          # reproducibility gate failure. It is not: a cached build passed and a
+          # cache-free build failed. See HISTORY.md. Kept on its own merits.
           build-args: |
             IMAGE_TAG=${{ steps.meta.outputs.tag }}
             BUILD_NUMBER=${{ steps.meta.outputs.build_number }}
