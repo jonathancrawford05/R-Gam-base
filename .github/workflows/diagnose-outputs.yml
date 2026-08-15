@@ -66,3 +66,37 @@ jobs:
           case_file=$(ls out1/*.json | grep -v index.json | head -1)
           python3 scripts/diagnose-repro.py \
             out1/index.json catalog/expected-hashes.json "$case_file"
+
+      # Build 7's image is reproducible, so the newer image is the thing that
+      # changed. Build it here and diff the outputs field by field: the section
+      # that differs is the diagnosis.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the current image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: oracle-now:candidate
+
+      - name: Where do the two images disagree?
+        run: |
+          set -euo pipefail
+          mkdir -p outnow
+          docker run --rm -v "$PWD/outnow:/work/out" oracle-now:candidate \
+            Rscript /opt/oracle/run.R --out /work/out >/dev/null
+          echo "### hashes"
+          sha256sum out1/*.json  | sed 's|out1/|build7  |'
+          sha256sum outnow/*.json | sed 's|outnow/|current |'
+          for case in binomial_logit_tp gaussian_tp_cr; do
+            echo
+            echo "=============== $case ==============="
+            python3 scripts/diff-outputs.py "out1/$case.json" "outnow/$case.json"
+          done
+
+      - name: And the two manifests
+        run: |
+          set -euo pipefail
+          docker run --rm "$B7" cat /opt/oracle/manifest.json > m_b7.json
+          docker run --rm oracle-now:candidate cat /opt/oracle/manifest.json > m_now.json
+          diff -u m_b7.json m_now.json && echo "manifests identical"
