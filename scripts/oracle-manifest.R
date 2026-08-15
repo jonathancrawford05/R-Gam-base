@@ -27,7 +27,12 @@ env_or_null <- function(name) {
 # change in those moves the oracle's numbers without moving mgcv's version.
 pkgs <- c(
   "mgcv", "jsonlite", "mboost",          # the ones a consumer asks about by name
-  "nlme", "Matrix", "MASS", "survival",  # mgcv's and mboost's load-bearing deps
+  # nlme and Matrix are mgcv's only non-base dependencies and are version-locked
+  # by assert-pinned-versions.R. MASS and survival are recorded but NOT
+  # load-bearing for mgcv -- MASS is a Suggests, not a dependency, and neither is
+  # gated. They are here so the manifest describes the image, not because a
+  # change in them could move a number.
+  "nlme", "Matrix", "MASS", "survival",
   "digest", "sessioninfo",               # output hashing and environment capture
   "stabs", "nnls", "quadprog", "partykit"
 )

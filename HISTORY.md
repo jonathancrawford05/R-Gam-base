@@ -84,3 +84,62 @@ because a commit SHA does not identify a build: the monthly rebuild runs on an
 unchanged `main` and would have pushed the same name onto a different digest.
 
 Neither can be deleted, for the same reason as `1971e750` above.
+
+## The oracle's numbers depended on the machine
+
+Build 7 recorded output hashes `da0bafdf`/`0e3964c7`. Later builds produced
+either those or `3ab5ad90`/`4a89f1e3` — **exactly two values, never a third,
+roughly half the runs each** — while every version check passed: mgcv 1.9.4,
+Matrix 1.7.5, nlme 3.1.169, `assert-pinned-versions.R` green, the selftest
+green, the two image manifests differing only in `built_at`.
+
+| run | commit | layer cache | result |
+| --- | --- | --- | --- |
+| push | `fb25715` | yes | fail |
+| push, re-run | `fb25715` | yes | fail |
+| push | `ce9005b4` | yes | **pass** |
+| pull_request | `ce9005b4` | yes | pass |
+| push | `e091a73` | no | pass |
+| pull_request | `e091a73` | no | pass |
+| push | `756a491` | no | **fail** |
+| pull_request | `756a491` | no | pass |
+
+### Two wrong causes, both stated too confidently
+
+1. **BLAS/CPU floating point** — proposed first, then discarded because one
+   diagnostic run reproduced build 7's hashes from a fresh build.
+2. **The GHA layer cache** — concluded from that same run and written into the
+   README, a workflow comment and a PR comment. The table refutes it outright:
+   a cached build passed and a cache-free build failed.
+
+Both were the same mistake: **treating a single observation of an intermittent
+phenomenon as proof of a mechanism.** It cost most of a day and two retractions.
+
+### The fix
+
+Two stable values rather than a spread is the signature of two thread counts.
+OpenBLAS sizes its pool from the visible core count, and a threaded reduction
+sums in a different order than a serial one — correct either way, differing in
+the last bits, which for an oracle is the entire artifact.
+
+`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1` are set as
+`ENV` in the image. Measured with `--cpuset-cpus` varied inside a single job
+(run 31889520068), the pinned image produced identical outputs at 1, 2 and 4
+cores, and produced a **third** value distinct from both earlier ones —
+`6fc8c248`/`e3ffe80d` — which is what a serial reduction should give if thread
+count was the variable.
+
+**Evidence, stated precisely:** the pin makes the output independent of core
+affinity *on one host*, and the new value is consistent with the thread
+hypothesis. That is support, not proof. The proof is cross-host, and it arrives
+for free: ordinary CI runs land on varied runners, so a run of green gate
+results across successive builds is the confirmation. If the gate fails again,
+the hypothesis is wrong and the two-valued pattern needs re-examining — do not
+update the baseline to make it pass.
+
+### Consequence for consumers
+
+The reference values changed once, deliberately, at this commit. Digests already
+pinned are unaffected — build 7 and earlier are exactly as published — but a
+consumer adopting a build from here on is comparing against different numbers
+and must re-measure at that point.

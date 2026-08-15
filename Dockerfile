@@ -31,6 +31,25 @@ ENV BASE_IMAGE_DIGEST=${BASE_DIGEST} \
     CRAN_SNAPSHOT=${CRAN_SNAPSHOT} \
     CRAN=https://p3m.dev/cran/__linux__/noble/${CRAN_SNAPSHOT}
 
+# Single-threaded linear algebra, so the numbers do not depend on the machine.
+#
+# OpenBLAS picks its thread count from the visible core count at runtime, and a
+# threaded reduction sums in an order that depends on how the work was split.
+# The result is correct either way and differs in the last bits -- which is
+# fatal for an oracle, because the last bits are the whole artifact.
+#
+# Observed: reference outputs took exactly two values across otherwise identical
+# builds, roughly half the time each, on runners that differ only in size. Two
+# stable values, not a spread, is the signature of two thread counts rather than
+# of noise.
+#
+# This costs wall time on large fits and buys the only property this image
+# sells. It is set as ENV rather than in Rprofile.site so it also governs
+# anything invoked in the image that is not R.
+ENV OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
+
 # setup_R.sh baked the "latest" repo URL into Rprofile.site when the base image
 # was built, so setting $CRAN alone is not enough. Rprofile.site is evaluated
 # top to bottom, so an appended options(repos=) wins over the baked-in one.
