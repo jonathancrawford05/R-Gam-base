@@ -30,7 +30,7 @@ can be deleted — so the history lives here.
 | 3 | `r4.6.1-cran2026-08-01-b3` | `sha256:9ea27ff8103aff292ec775e85a1d7ca810f7ea43dcde49d40ab210c13c591aaa` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T12:28:08Z | `c9cb8939255d3f13ec61fa7278c6ce471805104d` | First build produced under the immutable-tag policy (PR #3). **No version changed** -- R, the CRAN snapshot, mgcv 1.9.4 and mboost 2.9.13 are all identical to build 2, asserted at build time. What is new is identity: OCI labels (`org.opencontainers.image.version`/`.created`/`.revision`, `io.polaris.*`) and `/opt/oracle-manifest.json`, so this is the first image that can name itself. The bytes differ from build 2 only by those labels and that file. |
 | 4 | `r4.6.1-cran2026-08-01-b4` | `sha256:e295b0e23bc4eb8dab806b1e46830dde477e44259b54dcea3a9135538a9ed61c` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T12:56:48Z | `e198f20c1771458cd22160b46d699b9ee2fb7c1e` | **No version changed** -- identical R, CRAN snapshot, mgcv 1.9.4 and mboost 2.9.13 to build 3, asserted at build time. Published by the merge of PR #4, which changed only workflows, scripts and documentation; the image differs from build 3 only in the labels that record its own tag, timestamp and repo SHA. First row inserted into the table rather than appended past the end of the file. |
 | 5 | `r4.6.1-cran2026-08-01-b5` | `sha256:f77fd7ae6bfc86154e846632b0dad4e552ecf488d2db86b90074c9f8305c6037` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T13:06:31Z | `c1a7864acdefb7c25d20683477744220e28b04a8` | **No version changed** -- identical R, CRAN snapshot, mgcv 1.9.4 and mboost 2.9.13 to build 4, asserted at build time. Published by the merge of PR #5, which changed only catalog-reading logic (`scripts/catalog.sh`) and documentation. |
-| 6 | `r4.6.1-cran2026-08-01-b6` | `sha256:779c286a13531d3d89e9742b282348dea1f6ce940c66a75d0f78ae41461550be` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T18:45:38Z | `99035a32dfe5efe467f80837f39fbdcbc3c1f1c1` | **No version changed** -- identical R, CRAN snapshot, mgcv 1.9.4 and mboost 2.9.13 to build 5, asserted at build time. Published by the merge of PR #7, which changed only README and BACKLOG. **Supersedes the build-5 reconciliation snapshot below**, exactly as that section warns: `latest` and `r4.6.1-latest` have moved off `f77fd7ae` onto this digest, and the snapshot has no `-b6` row. This was a known and accepted consequence of merging #7, not drift. |
+| 6 | `r4.6.1-cran2026-08-01-b6` | `sha256:779c286a13531d3d89e9742b282348dea1f6ce940c66a75d0f78ae41461550be` | 4.6.1 | 2026-08-01 | 1.9.4 | 2.9.13 | 2026-08-14T18:45:38Z | `99035a32dfe5efe467f80837f39fbdcbc3c1f1c1` | **No version changed** -- identical R, CRAN snapshot, mgcv 1.9.4 and mboost 2.9.13 to build 5, asserted at build time. Published by the merge of PR #7, which changed README, BACKLOG and BUILDS.md; the README and BACKLOG paths are what took the push outside `paths-ignore`. **Supersedes the build-5 reconciliation snapshot below**, exactly as that section warns: `latest` and `r4.6.1-latest` have moved off `f77fd7ae` onto this digest, and the snapshot has no `-b6` row. This was a known and accepted consequence of merging #7, not drift. |
 <!-- new build rows are inserted directly above this line -->
 
 ## Notes on the backfilled rows
@@ -182,3 +182,67 @@ identify a build, and the monthly rebuild would eventually have pushed the same
 name onto a different digest. They happen to be unambiguous only because no
 rebuild has reused their SHA. The full explanation is in README.md's tag table;
 BACKLOG.md records the history under P2-6, now closed.
+
+## Correction: builds 3 and 4 overclaim byte identity
+
+Rows are never edited, so this is recorded rather than patched in place. Raised
+in review of PR #8.
+
+Two rows describe what changed between builds in terms of *bytes*:
+
+- **build 3** — "The bytes differ from build 2 only by those labels and that file."
+- **build 4** — "the image differs from build 3 only in the labels that record
+  its own tag, timestamp and repo SHA."
+
+**Both are false as stated.** Comparing manifests across every consecutive pair:
+
+| pair | layers identical | first difference |
+| --- | --- | --- |
+| 2 → 3 | 9 / 18 | layer 7 |
+| 3 → 4 | 9 / 18 | layer 7 |
+| 4 → 5 | 9 / 18 | layer 7 |
+| 5 → 6 | 9 / 18 | layer 7 |
+
+Layers 0–6 are the `rocker/r-ver` base and are identical in every build. Layer 7
+is the first this Dockerfile adds, and everything from there down gets new bytes
+on every publish. Labels live in the **config blob**, not in layers, so differing
+layer digests cannot be explained by a label change — the byte claim is falsified
+by the manifest alone.
+
+What this does **not** establish:
+
+- **It is not evidence that the installed content differs.** A layer digest is
+  the hash of a tar, and tars carry mtimes and entry ordering. A rebuild that
+  installs byte-for-byte identical packages still produces different layer
+  bytes. That is the ordinary case, not a suspicious one.
+- The version claims in those rows are untouched and stand on their own footing:
+  `scripts/assert-pinned-versions.R` fails the build if R, mgcv, Matrix, nlme,
+  jsonlite or digest move, and it ran in each of these builds.
+
+What could not be checked from the environment this was investigated in: the
+config blobs, which would say what actually changed, and the `reference-outputs`
+artifacts, which would settle it at the level that matters. GHCR redirects blob
+reads to `pkg-containers.githubusercontent.com` and Actions artifacts to
+`blob.core.windows.net`; both are blocked by egress policy. The artifact sizes
+differ slightly between builds 5 and 6 (57,587 vs 57,569 bytes), which is
+consistent with `index.json` recording a different build time and tag and says
+nothing either way about the case files.
+
+**Build 6's row is the pattern to follow**: it claims version identity, asserted
+at build time, and makes no byte claim at all. Byte-level statements about an
+image should not be written unless the bytes were compared.
+
+### The related gap, which is not a wording problem
+
+`README.md` states that a rebuild must produce byte-identical reference outputs,
+and `oracle/selftest.R` does check it — but by *simulating* a rebuild inside a
+single image, writing the same case twice with `built_at` set to 2000 and 2030
+and asserting the output hash is unchanged. That is a good test of the intended
+mechanism. It is not a comparison of two real builds, and nothing in CI compares
+this build's outputs against the previous build's.
+
+So the property the oracle actually sells — same inputs, same numbers, across
+rebuilds — is asserted but never measured end to end. Committing `index.json`'s
+hashes and diffing each publish against them would close it. Recorded here; not
+done, and not in the backlog as a P2, because it is a testing gap rather than a
+defect.
