@@ -84,3 +84,42 @@ because a commit SHA does not identify a build: the monthly rebuild runs on an
 unchanged `main` and would have pushed the same name onto a different digest.
 
 Neither can be deleted, for the same reason as `1971e750` above.
+
+## The layer cache produced different numbers under an identical manifest
+
+The worst finding here, and the one the reproducibility gate was built without
+knowing it would catch.
+
+Build 8 failed the gate on its first real comparison: build 7 recorded output
+hashes `da0bafdf`/`0e3964c7`, and every build after it produced
+`3ab5ad90`/`4a89f1e3` — reproducibly. Meanwhile every version check passed.
+mgcv 1.9.4, Matrix 1.7.5, nlme 3.1.169, `assert-pinned-versions.R` green, the
+selftest green, the two manifests differing only in `built_at`.
+
+Three builds in one job settled it:
+
+| build | outputs |
+| --- | --- |
+| build 7's published image, pulled by digest, run twice | `da0bafdf` / `0e3964c7` |
+| the same source, built fresh with **no cache** | `da0bafdf` / `0e3964c7`, identical field for field |
+| the same source via `publish.yml`, with `cache-from: type=gha` | `3ab5ad90` / `4a89f1e3` |
+
+The source was innocent, the runner was innocent, and the baseline was faithful.
+**The variable was the GitHub Actions layer cache**, which served a layer that
+computed different numbers while nothing observable about the environment
+changed.
+
+That is the exact drift this image exists to prevent, and it was invisible to
+every check that existed before the output-hash gate — because version pinning
+answers "is the same software installed", not "does it compute the same thing".
+
+`cache-from`/`cache-to` were removed from the image build. Not a workaround: for
+an image whose whole claim is that its answers do not move, a mutable cache in
+the path that determines those answers cannot be traded for build time. The
+build is about 50 seconds.
+
+Two wrong turns on the way, recorded because both were confidently stated:
+BLAS/CPU floating-point variation was proposed as the cause and was wrong, and
+"a re-run produced the same hashes, therefore it is deterministic" was too
+strong — a re-run rules out run-to-run races, not machine-to-machine variation.
+Only running build 7's own image on the same host settled it.

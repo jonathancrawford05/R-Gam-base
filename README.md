@@ -311,7 +311,10 @@ is early warning that a pin has rotted. Picking up OS patches means bumping
 `BASE_DIGEST`, which is a deliberate commit.
 
 Because of that, a rebuild must produce byte-identical reference outputs — and
-this is now **checked, not asserted**. Every publish compares its outputs against
+this is now **checked, not asserted**. It has already earned its place: it caught
+the GHA layer cache serving a layer that computed different numbers under an
+identical version manifest (see [HISTORY.md](HISTORY.md)), which is why the image
+build carries no layer cache. Every publish compares its outputs against
 `catalog/expected-hashes.json`, the hashes the previous build produced, and fails
 on any difference. `scripts/check-output-hashes.py` is the gate.
 
