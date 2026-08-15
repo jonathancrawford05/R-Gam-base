@@ -63,38 +63,6 @@ jobs:
       - name: Compare against the committed baseline
         run: |
           set -euo pipefail
-          echo "### committed baseline (written by build 7 itself)"
-          cat catalog/expected-hashes.json
-          echo
-          echo "### what build 7's image produces today"
-          python3 -c '
-import json
-idx = json.load(open("out1/index.json"))
-for o in idx["outputs"]:
-    print(f"  {o[\"path\"]}  {o[\"sha256\"]}")'
-          echo
-          echo "### verdict"
-          python3 - <<'PY'
-import json
-base = json.load(open("catalog/expected-hashes.json"))
-idx  = json.load(open("out1/index.json"))
-now  = {o["path"]: o["sha256"] for o in idx["outputs"]}
-if now == base:
-    print("MATCHES the baseline -> build 7's image is stable; the newer IMAGES differ (case B).")
-else:
-    print("DIFFERS from the baseline -> build 7's own image no longer reproduces the")
-    print("hashes build 7 committed. The baseline is not a property of the image (case A),")
-    print("and the gate has been comparing against a fiction.")
-    for k in sorted(set(base) | set(now)):
-        if base.get(k) != now.get(k):
-            print(f"  {k}\n    baseline {base.get(k)}\n    today    {now.get(k)}")
-PY
-
-      # If the environment block differs, the cause is provenance, not numerics.
-      - name: The embedded environment block
-        run: |
-          set -euo pipefail
-          python3 -c '
-import json, glob
-p = sorted(g for g in glob.glob("out1/*.json") if not g.endswith("index.json"))[0]
-print(json.dumps(json.load(open(p))["environment"], indent=2, sort_keys=True))'
+          case_file=$(ls out1/*.json | grep -v index.json | head -1)
+          python3 scripts/diagnose-repro.py \
+            out1/index.json catalog/expected-hashes.json "$case_file"
