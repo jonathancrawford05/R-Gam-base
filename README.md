@@ -169,6 +169,36 @@ mgcv-conformance:
 The digest for each build is printed in that run's GitHub Actions job summary and
 recorded in [`BUILDS.md`](BUILDS.md).
 
+## Downstream invocation contract
+
+The image must remain runnable as:
+
+```bash
+docker run --rm -v <host>:/work -w /work <image> Rscript <file> <args>
+```
+
+Three properties that no version number covers, and that a consumer's CI depends
+on:
+
+1. **`Rscript` is on `PATH`** — no wrapper script required.
+2. **No `ENTRYPOINT`** — consumers pass a command directly, and an entrypoint
+   would prefix or swallow it.
+3. **Writes as a user that can create files in a bind-mounted host workspace** —
+   currently root, as `rocker/r-ver` ships. Adding a `USER` directive would break
+   the output write with a permissions error that names nothing relevant.
+
+polaris-re's conformance job runs exactly this shape. Breaking any of the three
+breaks a consumer with an error that does not point at its cause.
+
+**This is enforced, not just documented.** The `Downstream invocation contract`
+step in `publish.yml` inspects the built image for an added `ENTRYPOINT` or
+`USER`, then runs the consumer's exact invocation against a real bind mount and
+requires the file to be readable back on the host. It gates the build, so a
+regression cannot be published.
+
+All three held for builds 1–7 by accident of the base image. Now they hold by
+assertion.
+
 ## Boosting with mboost
 
 The image carries `mboost` from the same dated snapshot, for `gamboost()` GA2M

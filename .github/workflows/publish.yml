@@ -158,6 +158,50 @@ jobs:
       - name: Selftest
         run: docker run --rm oracle-local:candidate Rscript /opt/oracle/selftest.R
 
+      # The downstream invocation contract, asserted rather than assumed.
+      #
+      # polaris-re runs this image as:
+      #   docker run --rm -v <host>:/work -w /work <image> Rscript <file> <args>
+      # which depends on three properties of the image that no version number
+      # covers. All three passed incidentally for builds 1-7; nothing made them
+      # promises. A regression here breaks a consumer with an error that does not
+      # name its cause -- a permissions failure on an output write, or a command
+      # silently swallowed by an ENTRYPOINT.
+      - name: Downstream invocation contract
+        run: |
+          set -euo pipefail
+          fail=0
+
+          ep=$(docker inspect -f '{{json .Config.Entrypoint}}' oracle-local:candidate)
+          if [ "$ep" != "null" ] && [ "$ep" != "[]" ]; then
+            echo "::error title=ENTRYPOINT added::Config.Entrypoint is $ep. Consumers pass a \
+          command (Rscript ...) directly; an entrypoint prefixes or swallows it."
+            fail=1
+          fi
+
+          user=$(docker inspect -f '{{.Config.User}}' oracle-local:candidate)
+          if [ -n "$user" ]; then
+            echo "::error title=USER added::Config.User is '$user'. The image must be able to \
+          write into a bind-mounted host workspace; a non-root user fails that with a \
+          permissions error that looks nothing like its cause."
+            fail=1
+          fi
+
+          # The real shape, end to end: bind mount, -w /work, Rscript on PATH, and
+          # a file that the host can actually read back afterwards.
+          probe=$(mktemp -d)
+          docker run --rm -v "$probe:/work" -w /work oracle-local:candidate \
+            Rscript -e 'writeLines("ok", "contract.txt")'
+          if [ "$(cat "$probe/contract.txt" 2>/dev/null)" != "ok" ]; then
+            echo "::error title=Cannot write to a bind mount::The consumer's invocation shape \
+          did not produce a host-readable file."
+            fail=1
+          fi
+          rm -rf "$probe"
+
+          [ "$fail" -eq 0 ] && echo "invocation contract holds"
+          exit "$fail"
+
       # Also exercises the way polaris-re will consume the image: mount a
       # workspace, write reference outputs into it.
       - name: Generate reference outputs
